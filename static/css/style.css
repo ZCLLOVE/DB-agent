@@ -1,0 +1,405 @@
+/* DB-Agent 全局样式 - 暗色主题 */
+
+/* 基础重置 */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2a4a transparent;
+}
+
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #2a2a4a;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #3a3a5a;
+}
+
+/* CodeMirror 暗色适配 */
+.CodeMirror {
+    height: 100% !important;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    background: #1a1a2e !important;
+}
+.CodeMirror-gutters {
+    background: #1a1a2e !important;
+    border-right: 1px solid #2a2a4a !important;
+}
+.CodeMirror-linenumber {
+    color: #4a4a6a !important;
+}
+.CodeMirror-cursor {
+    border-left-color: #e94560 !important;
+}
+.CodeMirror-selected {
+    background: #2a2a5a !important;
+}
+.CodeMirror-focused .CodeMirror-selected {
+    background: #3a3a6a !important;
+}
+.cm-s-material-darker .cm-keyword { color: #c792ea !important; }
+.cm-s-material-darker .cm-string { color: #c3e88d !important; }
+.cm-s-material-darker .cm-number { color: #f78c6c !important; }
+.cm-s-material-darker .cm-comment { color: #546e7a !important; }
+.cm-s-material-darker .cm-variable-2 { color: #eeffff !important; }
+
+/* SQL 提示补全 */
+.CodeMirror-hints {
+    background: #1f1f38 !important;
+    border: 1px solid #2a2a4a !important;
+    border-radius: 4px !important;
+    font-family: 'Consolas', monospace !important;
+    font-size: 12px !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+.CodeMirror-hint {
+    color: #b0b8c8 !important;
+    padding: 2px 6px !important;
+}
+.CodeMirror-hint-active {
+    background: #0f3460 !important;
+    color: #fff !important;
+}
+
+/* 表浏览器树形结构 */
+.tree-item {
+    padding: 2px 4px 2px 0;
+    cursor: pointer;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    user-select: none;
+}
+.tree-item:hover {
+    background: rgba(255,255,255,0.05);
+}
+.tree-item.active {
+    background: rgba(233, 69, 96, 0.15);
+    color: #e94560;
+}
+.tree-toggle {
+    width: 16px;
+    text-align: center;
+    color: #4a4a6a;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.tree-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+}
+.tree-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tree-children {
+    padding-left: 16px;
+}
+.tree-column-type {
+    color: #5a8a7a;
+    font-size: 11px;
+    margin-left: auto;
+    padding-right: 4px;
+}
+.tree-column-badge {
+    font-size: 9px;
+    padding: 0 3px;
+    border-radius: 2px;
+    line-height: 14px;
+}
+.badge-pk {
+    background: #533483;
+    color: #d4b5ff;
+}
+.badge-comment {
+    color: #546e7a;
+    font-size: 10px;
+}
+
+/* Tab 样式 */
+.tab-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 12px;
+    height: 100%;
+    font-size: 12px;
+    color: #6b7280;
+    cursor: pointer;
+    border-right: 1px solid #2a2a4a;
+    white-space: nowrap;
+    position: relative;
+}
+.tab-item:hover {
+    background: rgba(255,255,255,0.03);
+    color: #9ca3af;
+}
+.tab-item.active {
+    color: #e94560;
+    background: #1a1a2e;
+}
+.tab-item.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #e94560;
+}
+.tab-close {
+    font-size: 14px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    padding: 0 2px;
+}
+.tab-item:hover .tab-close {
+    opacity: 1;
+}
+
+/* 数据表格 */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.data-table th {
+    background: #1f1f38;
+    color: #9ca3af;
+    font-weight: 500;
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 1px solid #2a2a4a;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+.data-table th:hover {
+    background: #252545;
+}
+.data-table td {
+    padding: 3px 8px;
+    border-bottom: 1px solid #1f1f38;
+    white-space: nowrap;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+}
+.data-table tr:hover td {
+    background: rgba(255,255,255,0.02);
+}
+.data-table .cell-null {
+    color: #4a4a6a;
+    font-style: italic;
+}
+
+/* AI 对话气泡 */
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.chat-bubble {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.6;
+    word-break: break-word;
+}
+.chat-bubble.user {
+    align-self: flex-end;
+    background: #0f3460;
+    border-bottom-right-radius: 4px;
+}
+.chat-bubble.assistant {
+    align-self: flex-start;
+    background: #252545;
+    border-bottom-left-radius: 4px;
+}
+.chat-bubble pre {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 6px 0;
+    overflow-x: auto;
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    color: #c3e88d;
+}
+.chat-bubble code {
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    background: #1a1a2e;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #c3e88d;
+}
+.chat-bubble .tool-call {
+    font-size: 11px;
+    color: #5a8a7a;
+    padding: 4px 8px;
+    background: rgba(0,255,0,0.03);
+    border-left: 2px solid #2a5a3a;
+    margin: 4px 0;
+    border-radius: 2px;
+}
+.chat-input-area {
+    border-top: 1px solid #2a2a4a;
+    padding: 8px 12px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+.chat-input-area textarea {
+    flex: 1;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #e5e7eb;
+    font-size: 13px;
+    resize: none;
+    min-height: 36px;
+    max-height: 120px;
+    outline: none;
+    font-family: inherit;
+}
+.chat-input-area textarea:focus {
+    border-color: #0f3460;
+}
+.chat-input-area button {
+    background: #e94560;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.chat-input-area button:hover {
+    background: #d63850;
+}
+.typing-indicator::after {
+    content: '|';
+    animation: blink 1s infinite;
+    color: #e94560;
+}
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+/* SQL 编辑器面板 */
+.sql-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.sql-toolbar {
+    display: flex;
+    gap: 4px;
+    padding: 4px 8px;
+    background: #1f1f38;
+    border-bottom: 1px solid #2a2a4a;
+    align-items: center;
+}
+.sql-toolbar button {
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 3px;
+    border: 1px solid #2a2a4a;
+    background: transparent;
+    color: #9ca3af;
+    cursor: pointer;
+}
+.sql-toolbar button:hover {
+    background: #252545;
+    border-color: #4a4a6a;
+}
+.sql-toolbar button.primary {
+    background: #0f3460;
+    border-color: #1a4a7a;
+    color: white;
+}
+.sql-toolbar button.primary:hover {
+    background: #1a4a7a;
+}
+.sql-editor-wrapper {
+    flex: 0 0 180px;
+    border-bottom: 1px solid #2a2a4a;
+    overflow: hidden;
+}
+.sql-result-wrapper {
+    flex: 1;
+    overflow: auto;
+}
+.sql-result-info {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #6b7280;
+    background: #1f1f38;
+    border-bottom: 1px solid #2a2a4a;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* 侧边栏收起状态 */
+aside.collapsed {
+    width: 0 !important;
+    padding: 0;
+    border: none;
+    overflow: hidden;
+}
+
+/* 状态标签 */
+.status-success { color: #4ade80; }
+.status-error { color: #f87171; }
+
+/* 按钮右键菜单 */
+.context-menu {
+    position: fixed;
+    background: #1f1f38;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 4px 0;
+    z-index: 100;
+    min-width: 140px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.context-menu-item {
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #b0b8c8;
+}
+.context-menu-item:hover {
+    background: #0f3460;
+    color: white;
+}

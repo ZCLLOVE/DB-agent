@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 10 python run.py)",
+      "Bash(python -c \"from app.main import app; print\\(''Import OK''\\)\")"
+    ]
+  }
+}

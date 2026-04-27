@@ -1,0 +1,19 @@
+# 敏感数据
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+
+# IDE
+.idea/
+.vscode/
+
+# 环境
+.env
+*.db
