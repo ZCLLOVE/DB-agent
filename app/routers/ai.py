@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.models import ConnectionConfig, AiProvider, get_local_session
+from app.models import ConnectionConfig, AiProvider, ChatSession, get_local_session
 from app.services.ai_service import ai_service
 
 router = APIRouter(prefix="/api/ai", tags=["AI对话"])
@@ -159,3 +159,64 @@ def get_active_provider(session: Session = Depends(get_local_session)):
     if provider:
         return provider.to_dict(mask_key=True)
     return None
+
+
+# ── 会话管理 ──
+
+@router.get("/sessions")
+def list_sessions(session: Session = Depends(get_local_session)):
+    """列出所有会话（不含消息内容）"""
+    sessions = session.query(ChatSession).order_by(
+        ChatSession.updated_at.desc()
+    ).limit(100).all()
+    return [s.to_dict() for s in sessions]
+
+
+@router.post("/sessions")
+def create_session(session: Session = Depends(get_local_session)):
+    """新建空会话"""
+    s = ChatSession(title="新会话")
+    session.add(s)
+    session.commit()
+    session.refresh(s)
+    return {**s.to_dict(), "messages": []}
+
+
+@router.get("/sessions/{session_id}")
+def get_session(session_id: int, session: Session = Depends(get_local_session)):
+    """获取会话详情（含消息）"""
+    s = session.query(ChatSession).get(session_id)
+    if not s:
+        raise HTTPException(404, "会话不存在")
+    return {**s.to_dict(), "messages": s.get_messages()}
+
+
+class SessionUpdate(BaseModel):
+    title: str | None = None
+    messages: list[dict] | None = None
+
+
+@router.put("/sessions/{session_id}/save")
+def save_session(session_id: int, req: SessionUpdate,
+                 session: Session = Depends(get_local_session)):
+    """保存会话（标题和消息）"""
+    s = session.query(ChatSession).get(session_id)
+    if not s:
+        raise HTTPException(404, "会话不存在")
+    if req.title is not None:
+        s.title = req.title[:200]
+    if req.messages is not None:
+        s.set_messages(req.messages)
+    session.commit()
+    return s.to_dict()
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: int, session: Session = Depends(get_local_session)):
+    """删除会话"""
+    s = session.query(ChatSession).get(session_id)
+    if not s:
+        raise HTTPException(404, "会话不存在")
+    session.delete(s)
+    session.commit()
+    return {"message": "已删除"}

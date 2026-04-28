@@ -7,7 +7,8 @@
       "Bash(python -c \"from app.main import app; print\\(''Import OK''\\)\")",
       "Bash(node -c static/js/app.js)",
       "Bash(python -c \"from app.main import app; print\\(''OK''\\)\")",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

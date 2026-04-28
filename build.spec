@@ -2,7 +2,7 @@
 """PyInstaller 打包配置
 
 打包为单个 exe:
-  pyinstaller build.spec
+  python -m PyInstaller build.spec
 """
 
 import sys

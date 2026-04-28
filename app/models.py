@@ -85,6 +85,39 @@ class SqlHistory(Base):
     executed_at = Column(DateTime, default=datetime.now)
 
 
+class ChatSession(Base):
+    """AI 对话会话"""
+    __tablename__ = "chat_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(200), default="新会话", comment="会话标题")
+    connection_id = Column(Integer, nullable=True, comment="关联的连接ID")
+    messages = Column(Text, default="[]", comment="消息记录 JSON")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "connection_id": self.connection_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "message_count": len(self.get_messages()),
+        }
+
+    def get_messages(self) -> list:
+        import json
+        try:
+            return json.loads(self.messages or "[]")
+        except Exception:
+            return []
+
+    def set_messages(self, msgs: list):
+        import json
+        self.messages = json.dumps(msgs, ensure_ascii=False)
+
+
 # 初始化本地数据库
 _local_engine = create_engine(f"sqlite:///{LOCAL_DB_PATH}", echo=False)
 LocalSession = sessionmaker(bind=_local_engine)

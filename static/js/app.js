@@ -11,6 +11,8 @@ const state = {
     activeTabId: null,
     tableData: {},   // 缓存表结构数据
     tabCounter: 0,
+    currentSessionId: null,
+    sessionSidebarOpen: true,  // 侧边栏默认展开
 };
 
 // ==================== 工具函数 ====================
@@ -39,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadConnections();
     loadAiConfig();
     bindEvents();
+    // 创建固定的 AI 标签页（始终第一个，不可关闭）
+    createAiTab();
 });
 
 function bindEvents() {
@@ -54,7 +58,6 @@ function bindEvents() {
 
     // Tab 操作
     $('#btn-new-sql').onclick = () => createSqlTab();
-    $('#btn-open-ai').onclick = () => createAiTab();
 
     // 设置
     $('#btn-settings').onclick = () => {
@@ -496,7 +499,7 @@ async function showTableData(tableName) {
     try {
         const data = await api('GET', `/api/connections/${state.currentConnId}/tables/${encodeURIComponent(tableName)}/data`);
         data.tableName = tableName;  // 标记来源表（用于可编辑模式）
-        activeTab._tableData = { columns: data.columns, rows: data.rows }; // 保存供问AI用
+        activeTab._tableData = { columns: data.columns, rows: data.rows, tableName: tableName }; // 保存供问AI用
         renderResultTable(activeTab.id, data);
         const infoEl = document.querySelector(`#tab-panel-${activeTab.id} .sql-result-info`);
         const pkInfo = (data.primary_keys && data.primary_keys.length > 0)
@@ -525,7 +528,7 @@ async function showTableData(tableName) {
                     data.columns.forEach((col, i) => { obj[col] = row[i]; });
                     return JSON.stringify(obj);
                 });
-                sendHistoryToAi(selectedData);
+                sendHistoryToAi(selectedData, { table: tableName, type: 'data' });
             };
         }
     } catch (e) {
@@ -589,7 +592,7 @@ function rebindDataActionBar(tabId) {
             td.columns.forEach((col, i) => { obj[col] = row[i]; });
             return JSON.stringify(obj);
         });
-        sendHistoryToAi(selectedData);
+        sendHistoryToAi(selectedData, { table: tab._tableData?.tableName || '', type: 'data' });
     };
 }
 
@@ -614,7 +617,7 @@ function createAiTab() {
     const existing = state.tabs.find(t => t.type === 'ai');
     if (existing) {
         activateTab(existing.id);
-        return;
+        return existing;
     }
     const id = ++state.tabCounter;
     const tab = {
@@ -622,10 +625,13 @@ function createAiTab() {
         type: 'ai',
         title: 'AI 对话',
         chatHistory: [],
+        fixed: true,  // 标记为固定标签页，不可关闭
     };
-    state.tabs.push(tab);
+    // AI 标签页始终在最前面
+    state.tabs.unshift(tab);
     renderTabs();
     activateTab(id);
+    return tab;
 }
 
 function closeTab(tabId) {
@@ -634,6 +640,10 @@ function closeTab(tabId) {
 
     // 清理编辑器
     const tab = state.tabs[idx];
+    // 不允许关闭固定标签页（AI 对话）
+    if (tab.fixed) {
+        return;
+    }
     if (tab.editor) {
         tab.editor.to && tab.editor.to(); // destroy if possible
     }
@@ -654,13 +664,22 @@ function closeTab(tabId) {
 }
 
 function activateTab(tabId) {
+    const tab = state.tabs.find(t => t.id === tabId);
+    const prevActiveId = state.activeTabId;
+
     state.activeTabId = tabId;
+
+    // 如果点击的是 AI 标签页，且之前也是 AI 标签页，则切换侧边栏
+    if (tab && tab.type === 'ai' && prevActiveId === tabId) {
+        toggleSessionSidebar();
+        return;
+    }
+
     renderTabs();
     renderTabContent();
 
     // 初始化 CodeMirror（需要 DOM 已渲染）
     setTimeout(() => {
-        const tab = state.tabs.find(t => t.id === tabId);
         if (tab && tab.type === 'sql' && !tab.editor) {
             initSqlEditor(tab);
         }
@@ -673,14 +692,18 @@ function renderTabs() {
     state.tabs.forEach(tab => {
         const el = document.createElement('div');
         el.className = `tab-item ${tab.id === state.activeTabId ? 'active' : ''}`;
+        // 固定标签页不显示关闭按钮
+        const closeBtn = tab.fixed ? '' : '<span class="tab-close" title="关闭">&times;</span>';
         el.innerHTML = `
             <span>${escapeHtml(tab.title)}</span>
-            <span class="tab-close" title="关闭">&times;</span>
+            ${closeBtn}
         `;
-        el.querySelector('.tab-close').onclick = (e) => {
-            e.stopPropagation();
-            closeTab(tab.id);
-        };
+        if (!tab.fixed) {
+            el.querySelector('.tab-close').onclick = (e) => {
+                e.stopPropagation();
+                closeTab(tab.id);
+            };
+        }
         el.onclick = () => activateTab(tab.id);
         bar.appendChild(el);
     });
@@ -828,7 +851,24 @@ function createAiPanel(tab) {
     const panel = document.createElement('div');
     panel.className = 'chat-container';
     panel.id = `tab-panel-${tab.id}`;
-    panel.innerHTML = `
+    panel.style.flexDirection = 'row';
+
+    // 会话侧边栏
+    const sidebar = document.createElement('div');
+    sidebar.className = `session-sidebar ${state.sessionSidebarOpen ? '' : 'collapsed'}`;
+    sidebar.id = `session-sidebar-${tab.id}`;
+    sidebar.innerHTML = `
+        <div class="session-sidebar-header">
+            <button id="btn-new-session-${tab.id}">+ 新会话</button>
+        </div>
+        <div class="session-list" id="session-list-${tab.id}"></div>
+    `;
+
+    // 聊天主区域
+    const chatMain = document.createElement('div');
+    chatMain.className = 'chat-container';
+    chatMain.style.flex = '1';
+    chatMain.innerHTML = `
         <div class="chat-messages" id="chat-messages-${tab.id}"></div>
         <div class="chat-input-area">
             <div id="chat-input-${tab.id}" contenteditable="true"
@@ -838,8 +878,11 @@ function createAiPanel(tab) {
         </div>
     `;
 
+    panel.appendChild(sidebar);
+    panel.appendChild(chatMain);
+
     // 渲染已有消息
-    const messagesEl = panel.querySelector(`#chat-messages-${tab.id}`);
+    const messagesEl = chatMain.querySelector(`#chat-messages-${tab.id}`);
     if (tab.chatHistory) {
         tab.chatHistory.forEach(msg => {
             appendChatBubble(messagesEl, msg.role, msg.content);
@@ -847,10 +890,9 @@ function createAiPanel(tab) {
     }
 
     setTimeout(() => {
-        const input = panel.querySelector(`#chat-input-${tab.id}`);
-        const sendBtn = panel.querySelector(`#chat-send-${tab.id}`);
+        const input = chatMain.querySelector(`#chat-input-${tab.id}`);
+        const sendBtn = chatMain.querySelector(`#chat-send-${tab.id}`);
 
-        // Enter 发送，Shift+Enter 换行
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -858,7 +900,6 @@ function createAiPanel(tab) {
             }
         });
 
-        // 标签拖拽支持：允许在输入框内拖动标签改变位置
         input.addEventListener('dragover', (e) => {
             if (e.dataTransfer.types.includes('application/table-tag') ||
                 e.dataTransfer.types.includes('application/sql-tag')) {
@@ -873,7 +914,6 @@ function createAiPanel(tab) {
                 e.stopPropagation();
                 const draggedTag = input.querySelector('.table-tag.dragging, .sql-tag.dragging');
                 if (!draggedTag) return;
-                // 在鼠标位置插入标签
                 const range = document.caretRangeFromPoint(e.clientX, e.clientY);
                 if (range && input.contains(range.commonAncestorContainer)) {
                     range.insertNode(draggedTag);
@@ -883,6 +923,8 @@ function createAiPanel(tab) {
         });
 
         sendBtn.onclick = () => sendAiMessage(tab.id);
+        sidebar.querySelector(`#btn-new-session-${tab.id}`).onclick = () => newSession(tab.id);
+        loadSessionList(tab.id);
     }, 10);
 
     return panel;
@@ -978,6 +1020,10 @@ function renderResultTable(tabId, data) {
     // 表头 — 带列注释
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
+    // 勾选列表头（对齐数据行的勾选框 td）
+    const thCheck = document.createElement('th');
+    thCheck.style.width = '30px';
+    headerRow.appendChild(thCheck);
     columns.forEach((col, i) => {
         const th = document.createElement('th');
         const comment = commentMap[col];
@@ -1246,7 +1292,7 @@ async function showHistory(tabId) {
     }
 }
 
-function sendHistoryToAi(sqls) {
+function sendHistoryToAi(sqls, meta = {}) {
     // 确保 AI tab 存在
     let aiTab = state.tabs.find(t => t.type === 'ai');
     const alreadyActive = aiTab && state.activeTabId === aiTab.id;
@@ -1269,6 +1315,9 @@ function sendHistoryToAi(sqls) {
         // 创建 SQL 标签并插入
         sqls.forEach(sql => {
             const tag = createSqlTagElement(sql);
+            // 附加元数据
+            if (meta.table) tag.dataset.table = meta.table;
+            if (meta.type) tag.dataset.tagType = meta.type;
             // 尝试在光标位置插入
             const sel = window.getSelection();
             let inserted = false;
@@ -1347,13 +1396,19 @@ function extractChatInput(div) {
             text += node.textContent;
         } else if (node.nodeType === Node.ELEMENT_NODE) {
             if (node.classList && node.classList.contains('table-tag')) {
-                text += '`' + node.dataset.table + '`';
+                text += `【表名: ${node.dataset.table}】`;
             } else if (node.classList && node.classList.contains('sql-tag')) {
-                text += '`' + node.dataset.sql + '`';
+                const tagType = node.dataset.tagType;
+                const tagTable = node.dataset.table;
+                const sql = node.dataset.sql;
+                if (tagType === 'data') {
+                    text += `{表: ${tagTable || '未知'}, 数据: ${sql}}`;
+                } else {
+                    text += `(SQL: ${sql})`;
+                }
             } else if (node.tagName === 'BR') {
                 text += '\n';
             } else {
-                // 递归处理嵌套内容
                 text += extractChatInput(node);
             }
         }
@@ -1459,6 +1514,9 @@ async function sendAiMessage(tabId) {
     }
 
     messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // 自动保存会话
+    autoSaveSession();
 }
 
 function appendChatBubble(container, role, content) {
@@ -1631,6 +1689,125 @@ async function saveProvider() {
         await loadProviders();
     } catch (e) {
         alert('保存失败: ' + e.message);
+    }
+}
+
+// ==================== AI 会话管理 ====================
+
+function toggleSessionSidebar() {
+    state.sessionSidebarOpen = !state.sessionSidebarOpen;
+    const aiTab = state.tabs.find(t => t.type === 'ai');
+    if (!aiTab) return;
+    const sidebar = document.getElementById(`session-sidebar-${aiTab.id}`);
+    if (sidebar) sidebar.classList.toggle('collapsed', !state.sessionSidebarOpen);
+}
+
+async function loadSessionList(tabId) {
+    try {
+        const sessions = await api('GET', '/api/ai/sessions');
+        const list = document.getElementById(`session-list-${tabId}`);
+        if (!list) return;
+        list.innerHTML = '';
+        if (sessions.length === 0) {
+            list.innerHTML = '<div class="text-muted text-center py-4 text-xs">暂无会话记录</div>';
+            return;
+        }
+        sessions.forEach(s => {
+            const div = document.createElement('div');
+            div.className = `session-item ${s.id === state.currentSessionId ? 'active' : ''}`;
+            div.innerHTML = `
+                <span class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</span>
+                <span class="session-del" title="删除">&times;</span>
+            `;
+            div.querySelector('.session-title').onclick = () => loadSession(s.id);
+            div.querySelector('.session-del').onclick = (e) => {
+                e.stopPropagation();
+                deleteSession(s.id);
+            };
+            list.appendChild(div);
+        });
+    } catch (e) {
+        console.error('加载会话列表失败:', e);
+    }
+}
+
+async function newSession(tabId) {
+    try {
+        const s = await api('POST', '/api/ai/sessions');
+        state.currentSessionId = s.id;
+        const aiTab = state.tabs.find(t => t.type === 'ai');
+        if (aiTab) {
+            aiTab.chatHistory = [];
+            const msgs = document.getElementById(`chat-messages-${aiTab.id}`);
+            if (msgs) msgs.innerHTML = '';
+        }
+        await loadSessionList(tabId || aiTab?.id);
+    } catch (e) {
+        alert('创建会话失败: ' + e.message);
+    }
+}
+
+async function loadSession(sessionId) {
+    try {
+        const s = await api('GET', `/api/ai/sessions/${sessionId}`);
+        state.currentSessionId = sessionId;
+        const aiTab = state.tabs.find(t => t.type === 'ai');
+        if (!aiTab) return;
+        aiTab.chatHistory = s.messages || [];
+        const msgs = document.getElementById(`chat-messages-${aiTab.id}`);
+        if (msgs) {
+            msgs.innerHTML = '';
+            aiTab.chatHistory.forEach(msg => appendChatBubble(msgs, msg.role, msg.content));
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+        await loadSessionList(aiTab.id);
+    } catch (e) {
+        alert('加载会话失败: ' + e.message);
+    }
+}
+
+async function deleteSession(sessionId) {
+    if (!confirm('确认删除此会话？')) return;
+    try {
+        await api('DELETE', `/api/ai/sessions/${sessionId}`);
+        if (state.currentSessionId === sessionId) {
+            state.currentSessionId = null;
+            const aiTab = state.tabs.find(t => t.type === 'ai');
+            if (aiTab) {
+                aiTab.chatHistory = [];
+                const msgs = document.getElementById(`chat-messages-${aiTab.id}`);
+                if (msgs) msgs.innerHTML = '';
+            }
+        }
+        const aiTab = state.tabs.find(t => t.type === 'ai');
+        if (aiTab) await loadSessionList(aiTab.id);
+    } catch (e) {
+        alert('删除失败: ' + e.message);
+    }
+}
+
+async function autoSaveSession() {
+    const aiTab = state.tabs.find(t => t.type === 'ai');
+    if (!aiTab || aiTab.chatHistory.length === 0) return;
+
+    if (!state.currentSessionId) {
+        try {
+            const s = await api('POST', '/api/ai/sessions');
+            state.currentSessionId = s.id;
+            const firstMsg = aiTab.chatHistory.find(m => m.role === 'user');
+            const title = firstMsg ? firstMsg.content.substring(0, 50) : '新会话';
+            await api('PUT', `/api/ai/sessions/${s.id}/save`, { title, messages: aiTab.chatHistory });
+            await loadSessionList(aiTab.id);
+        } catch (e) {
+            console.error('自动创建会话失败:', e);
+        }
+        return;
+    }
+
+    try {
+        await api('PUT', `/api/ai/sessions/${state.currentSessionId}/save`, { messages: aiTab.chatHistory });
+    } catch (e) {
+        console.error('保存会话失败:', e);
     }
 }
 
