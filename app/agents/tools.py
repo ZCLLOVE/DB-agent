@@ -80,7 +80,26 @@ def _get_table_sample(connection_id: int, table_name: str,
 
 def _execute_sql(connection_id: int, sql: str) -> str:
     service, _ = _get_service(connection_id)
-    result = service.execute_sql(sql)
+
+    # 判断是否写操作
+    sql_upper = sql.strip().upper()
+    is_write = any(sql_upper.startswith(kw) for kw in
+                   ("INSERT", "UPDATE", "DELETE", "DROP", "CREATE",
+                    "ALTER", "TRUNCATE", "REPLACE"))
+
+    try:
+        result = service.execute_sql(sql)
+    except Exception as e:
+        # 写操作记录失败历史
+        if is_write:
+            _save_history(connection_id, sql, status="error", error=str(e))
+        raise
+
+    # 写操作记录成功历史
+    if is_write:
+        _save_history(connection_id, sql, status="success",
+                      rows_affected=result.get("rowcount", 0))
+
     if result["type"] == "query":
         columns = result["columns"]
         rows = result["rows"]
@@ -104,6 +123,27 @@ def _execute_sql(connection_id: int, sql: str) -> str:
         return "\n".join(lines)
     else:
         return result["message"]
+
+
+def _save_history(connection_id: int, sql: str, status: str = "success",
+                  rows_affected: int = 0, error: str = ""):
+    """记录 SQL 执行历史"""
+    from app.models import SqlHistory, LocalSession
+    session = LocalSession()
+    try:
+        history = SqlHistory(
+            connection_id=connection_id,
+            sql=sql,
+            status=status,
+            rows_affected=rows_affected,
+            error_message=error,
+        )
+        session.add(history)
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 # ==================== 工具注册表（OpenAI function calling 格式）====================

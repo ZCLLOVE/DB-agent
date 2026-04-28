@@ -30,17 +30,50 @@ class DbService:
                 return ["main"]
 
     def list_tables(self, schema: Optional[str] = None) -> list[dict]:
-        """列出指定数据库的所有表"""
+        """列出指定数据库的所有表（含表注释）"""
+        dialect = self.engine.dialect.name
         inspector = inspect(self.engine)
         tables = []
+
+        # 获取表注释
+        table_comments = {}
+        if dialect == "mysql":
+            try:
+                with self.engine.connect() as conn:
+                    db = schema or self.engine.url.database
+                    result = conn.execute(text(
+                        "SELECT TABLE_NAME, TABLE_COMMENT FROM information_schema.TABLES "
+                        "WHERE TABLE_SCHEMA = :db AND TABLE_TYPE = 'BASE TABLE'"
+                    ), {"db": db})
+                    table_comments = {row[0]: row[1] for row in result}
+            except Exception:
+                pass
+        elif dialect == "postgresql":
+            try:
+                with self.engine.connect() as conn:
+                    pg_schema = schema or "public"
+                    result = conn.execute(text(
+                        "SELECT obj_description(c.oid) "
+                        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = :schema"
+                    ), {"schema": pg_schema})
+                    # PostgreSQL 的表注释需要逐表获取，这里简化处理
+            except Exception:
+                pass
+
         table_names = inspector.get_table_names(schema=schema)
         for name in table_names:
-            tables.append({"name": name, "type": "table"})
+            tables.append({
+                "name": name,
+                "type": "table",
+                "comment": table_comments.get(name, ""),
+            })
+
         # 也获取视图
         try:
             views = inspector.get_view_names(schema=schema)
             for name in views:
-                tables.append({"name": name, "type": "view"})
+                tables.append({"name": name, "type": "view", "comment": ""})
         except Exception:
             pass
         return tables
@@ -86,7 +119,23 @@ class DbService:
             result = conn.execute(text(sql))
             columns = list(result.keys())
             rows = [list(row) for row in result.fetchall()]
-            return {"columns": columns, "rows": rows}
+
+        # 获取列元数据（注释、主键）用于前端展示和编辑
+        try:
+            columns_info = self.describe_table(table_name, schema)
+            column_meta = [{"name": c["name"], "comment": c["comment"]}
+                           for c in columns_info]
+            pk_columns = [c["name"] for c in columns_info if c["primary_key"]]
+        except Exception:
+            column_meta = [{"name": c, "comment": ""} for c in columns]
+            pk_columns = []
+
+        return {
+            "columns": columns,
+            "rows": rows,
+            "column_meta": column_meta,
+            "primary_keys": pk_columns,
+        }
 
     def execute_sql(self, sql: str, params: Optional[dict] = None) -> dict:
         """执行 SQL 语句"""

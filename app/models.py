@@ -4,7 +4,7 @@
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, create_engine
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import LOCAL_DB_PATH
@@ -40,6 +40,35 @@ class ConnectionConfig(Base):
             "database": self.database,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AiProvider(Base):
+    """AI 提供商配置"""
+    __tablename__ = "ai_providers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, comment="提供商名称")
+    base_url = Column(String(500), nullable=False, comment="API Base URL")
+    api_key = Column(String(500), default="", comment="API Key")
+    model = Column(String(100), nullable=False, comment="模型名称")
+    temperature = Column(Float, default=0.0, comment="Temperature")
+    is_active = Column(Boolean, default=False, comment="是否当前激活")
+    created_at = Column(DateTime, default=datetime.now)
+
+    def to_dict(self, mask_key: bool = True) -> dict:
+        """转换为字典"""
+        key = self.api_key
+        if mask_key and key:
+            key = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
+        return {
+            "id": self.id,
+            "name": self.name,
+            "base_url": self.base_url,
+            "api_key": key,
+            "model": self.model,
+            "temperature": self.temperature,
+            "is_active": self.is_active,
         }
 
 

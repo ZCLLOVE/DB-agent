@@ -17,6 +17,7 @@ from fastapi import Request
 
 from app.config import TEMPLATES_DIR, STATIC_DIR, HOST, PORT
 from app.models import init_local_db
+from app.config import migrate_ai_config_to_db
 
 # 创建 FastAPI 应用
 app = FastAPI(title="DB-Agent", version="1.0.0")
@@ -46,6 +47,7 @@ async def index(request: Request):
 async def startup():
     """应用启动时初始化"""
     init_local_db()
+    migrate_ai_config_to_db()
 
 
 def open_browser():

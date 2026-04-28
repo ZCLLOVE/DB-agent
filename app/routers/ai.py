@@ -1,6 +1,6 @@
 """AI 对话接口
 
-提供流式 AI 对话能力，支持多轮上下文。
+提供流式 AI 对话能力，支持多轮上下文和多提供商管理。
 """
 
 import json
@@ -9,9 +9,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.models import ConnectionConfig, get_local_session
+from app.models import ConnectionConfig, AiProvider, get_local_session
 from app.services.ai_service import ai_service
-from app.config import load_ai_config, save_ai_config
 
 router = APIRouter(prefix="/api/ai", tags=["AI对话"])
 
@@ -22,23 +21,32 @@ class ChatRequest(BaseModel):
     chat_history: list[dict] = []
 
 
-class AiConfigRequest(BaseModel):
+class ProviderCreate(BaseModel):
+    name: str
+    base_url: str
     api_key: str = ""
-    base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-chat"
+    model: str
     temperature: float = 0.0
 
+
+class ProviderUpdate(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+
+
+# ── AI 对话 ──
 
 @router.post("/chat")
 async def chat(req: ChatRequest,
                session: Session = Depends(get_local_session)):
     """流式 AI 对话"""
-    # 验证连接存在
     conn = session.query(ConnectionConfig).get(req.connection_id)
     if not conn:
         raise HTTPException(404, "连接不存在")
 
-    # 在消息中注入 connection_id 上下文
     context_message = (
         f"[当前连接: {conn.name} ({conn.db_type}), "
         f"数据库: {conn.database}, connection_id={req.connection_id}]\n\n"
@@ -56,31 +64,98 @@ async def chat(req: ChatRequest,
     )
 
 
-@router.get("/config")
-def get_ai_config():
-    """获取 AI 配置"""
-    config = load_ai_config()
-    # 脱敏 API Key
-    masked = config.copy()
-    if masked["api_key"]:
-        key = masked["api_key"]
-        masked["api_key_display"] = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
-    else:
-        masked["api_key_display"] = ""
-    return masked
+# ── 提供商管理 ──
+
+@router.get("/providers")
+def list_providers(session: Session = Depends(get_local_session)):
+    """列出所有 AI 提供商"""
+    providers = session.query(AiProvider).order_by(AiProvider.id).all()
+    return [p.to_dict(mask_key=True) for p in providers]
 
 
-@router.post("/config")
-def update_ai_config(req: AiConfigRequest):
-    """更新 AI 配置"""
-    config = load_ai_config()
-    # 只更新非空字段
-    if req.api_key:
-        config["api_key"] = req.api_key
-    config["base_url"] = req.base_url
-    config["model"] = req.model
-    config["temperature"] = req.temperature
+@router.post("/providers")
+def create_provider(req: ProviderCreate,
+                    session: Session = Depends(get_local_session)):
+    """新建 AI 提供商"""
+    provider = AiProvider(
+        name=req.name,
+        base_url=req.base_url,
+        api_key=req.api_key,
+        model=req.model,
+        temperature=req.temperature,
+        is_active=False,
+    )
+    # 如果是第一个提供商，自动激活
+    if session.query(AiProvider).count() == 0:
+        provider.is_active = True
+    session.add(provider)
+    session.commit()
+    session.refresh(provider)
+    ai_service.reset()
+    return provider.to_dict(mask_key=True)
 
-    save_ai_config(config)
-    ai_service.reset()  # 重置 Agent 以使用新配置
-    return {"message": "配置已保存"}
+
+@router.put("/providers/{provider_id}")
+def update_provider(provider_id: int, req: ProviderUpdate,
+                    session: Session = Depends(get_local_session)):
+    """更新 AI 提供商"""
+    provider = session.query(AiProvider).get(provider_id)
+    if not provider:
+        raise HTTPException(404, "提供商不存在")
+    if req.name is not None:
+        provider.name = req.name
+    if req.base_url is not None:
+        provider.base_url = req.base_url
+    if req.api_key is not None:
+        provider.api_key = req.api_key
+    if req.model is not None:
+        provider.model = req.model
+    if req.temperature is not None:
+        provider.temperature = req.temperature
+    session.commit()
+    session.refresh(provider)
+    ai_service.reset()
+    return provider.to_dict(mask_key=True)
+
+
+@router.delete("/providers/{provider_id}")
+def delete_provider(provider_id: int,
+                    session: Session = Depends(get_local_session)):
+    """删除 AI 提供商"""
+    provider = session.query(AiProvider).get(provider_id)
+    if not provider:
+        raise HTTPException(404, "提供商不存在")
+    was_active = provider.is_active
+    session.delete(provider)
+    # 如果删除的是激活的提供商，激活第一个剩余的
+    if was_active:
+        first = session.query(AiProvider).order_by(AiProvider.id).first()
+        if first:
+            first.is_active = True
+    session.commit()
+    ai_service.reset()
+    return {"message": "已删除"}
+
+
+@router.post("/providers/{provider_id}/activate")
+def activate_provider(provider_id: int,
+                      session: Session = Depends(get_local_session)):
+    """激活指定提供商"""
+    provider = session.query(AiProvider).get(provider_id)
+    if not provider:
+        raise HTTPException(404, "提供商不存在")
+    # 取消其他激活
+    session.query(AiProvider).update({"is_active": False})
+    provider.is_active = True
+    session.commit()
+    ai_service.reset()
+    return provider.to_dict(mask_key=True)
+
+
+@router.get("/active-provider")
+def get_active_provider(session: Session = Depends(get_local_session)):
+    """获取当前激活的提供商"""
+    provider = session.query(AiProvider).filter(AiProvider.is_active == True).first()
+    if provider:
+        return provider.to_dict(mask_key=True)
+    return None

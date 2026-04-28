@@ -6,10 +6,9 @@
 
 from typing import AsyncGenerator
 import json
-import inspect
 from openai import AsyncOpenAI
 
-from app.config import load_ai_config
+from app.models import AiProvider, LocalSession
 from app.agents.tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
 
 
@@ -32,6 +31,23 @@ SYSTEM_PROMPT = """你是一个专业的数据库助手。你可以帮助用户�
 """
 
 
+def _get_active_provider_config() -> dict:
+    """从数据库获取当前激活的 AI 提供商配置"""
+    session = LocalSession()
+    try:
+        provider = session.query(AiProvider).filter(AiProvider.is_active == True).first()
+        if provider:
+            return {
+                "api_key": provider.api_key,
+                "base_url": provider.base_url,
+                "model": provider.model,
+                "temperature": provider.temperature,
+            }
+        return {}
+    finally:
+        session.close()
+
+
 class AiService:
     """AI 对话服务，基于 OpenAI 客户端实现 Agent 循环"""
 
@@ -41,7 +57,7 @@ class AiService:
 
     def _get_client(self) -> AsyncOpenAI:
         """获取或创建 OpenAI 客户端"""
-        config = load_ai_config()
+        config = _get_active_provider_config()
         if self._config_cache == config and self._client:
             return self._client
 
@@ -56,7 +72,7 @@ class AiService:
         return self._client
 
     def _get_model(self) -> str:
-        config = load_ai_config()
+        config = _get_active_provider_config()
         return config.get("model", "deepseek-chat")
 
     async def chat_stream(self, message: str, chat_history: list[dict],
@@ -86,6 +102,7 @@ class AiService:
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
                 stream=True,
+                max_tokens=8192,
             )
 
             # 收集流式响应

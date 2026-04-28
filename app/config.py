@@ -1,6 +1,5 @@
 """配置管理模块"""
 
-import os
 import json
 from pathlib import Path
 
@@ -23,30 +22,34 @@ STATIC_DIR = BASE_DIR / "static"
 HOST = "127.0.0.1"
 PORT = 18664
 
-# AI 配置（默认值，用户可在设置中修改）
-DEFAULT_AI_CONFIG = {
-    "api_key": "",
-    "base_url": "https://api.deepseek.com",
-    "model": "deepseek-v4-flash",
-    "temperature": 0.7,
-}
 
-
-def load_ai_config() -> dict:
-    """加载 AI 配置"""
-    config_file = DATA_DIR / "ai_config.json"
-    if config_file.exists():
+def migrate_ai_config_to_db():
+    """将旧 JSON 配置迁移到数据库 AiProvider 表（仅首次运行时执行）"""
+    from app.models import AiProvider, LocalSession
+    session = LocalSession()
+    try:
+        # 如果已有 provider 则跳过
+        if session.query(AiProvider).count() > 0:
+            return
+        # 尝试从旧 JSON 配置读取
+        config_file = DATA_DIR / "ai_config.json"
+        if not config_file.exists():
+            return
         with open(config_file, "r", encoding="utf-8") as f:
             saved = json.load(f)
-        # 合并默认值，确保新增字段有默认值
-        config = {**DEFAULT_AI_CONFIG, **saved}
-    else:
-        config = dict(DEFAULT_AI_CONFIG)
-    return config
-
-
-def save_ai_config(config: dict):
-    """保存 AI 配置"""
-    config_file = DATA_DIR / "ai_config.json"
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+        if saved.get("api_key"):
+            provider = AiProvider(
+                name="DeepSeek",
+                base_url=saved.get("base_url", "https://api.deepseek.com"),
+                api_key=saved["api_key"],
+                model=saved.get("model", "deepseek-chat"),
+                temperature=saved.get("temperature", 0.0),
+                is_active=True,
+            )
+            session.add(provider)
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"[迁移] AI 配置迁移失败: {e}")
+    finally:
+        session.close()

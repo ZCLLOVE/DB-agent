@@ -12,6 +12,10 @@
     </div>
     <!-- 右侧按钮 -->
     <div class="flex items-center gap-2">
+        <!-- AI 模型选择器 -->
+        <select id="ai-provider-select" class="bg-bg-lighter border border-border rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent-light max-w-[200px]" title="选择 AI 模型">
+            <option value="">未配置 AI</option>
+        </select>
         <button id="btn-settings" class="text-muted hover:text-gray-300 p-1 rounded hover:bg-bg-lighter" title="AI 设置">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
         </button>
@@ -21,15 +25,19 @@
 <!-- 主内容区 -->
 <div class="flex flex-1 overflow-hidden">
     <!-- 侧边栏 - 表浏览器 -->
-    <aside id="sidebar" class="w-60 bg-bg-light border-r border-border flex flex-col shrink-0 overflow-hidden">
-        <div class="p-2 text-xs text-muted border-b border-border flex items-center justify-between">
+    <aside id="sidebar" class="bg-bg-light border-r border-border flex flex-col shrink-0 overflow-hidden" style="width:240px;min-width:160px;max-width:480px;">
+        <div class="p-2 text-xs text-muted border-b border-border flex items-center">
             <span>表浏览器</span>
-            <button id="btn-sidebar-toggle" class="hover:text-gray-300" title="收起侧边栏">&lt;</button>
+        </div>
+        <div class="px-2 py-1.5 border-b border-border">
+            <input id="table-filter" type="text" placeholder="搜索表名/备注..." class="w-full bg-bg border border-border rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent-light">
         </div>
         <div id="table-tree" class="flex-1 overflow-auto text-sm p-1">
             <div class="text-muted text-center py-8 text-xs">请先选择数据库连接</div>
         </div>
     </aside>
+    <!-- 侧边栏拖拽分割条 -->
+    <div id="sidebar-resizer" class="w-1 bg-transparent hover:bg-accent-light cursor-col-resize shrink-0 transition-colors"></div>
 
     <!-- 右侧主内容 -->
     <main class="flex-1 flex flex-col overflow-hidden">
@@ -110,31 +118,47 @@
     </div>
 </div>
 
-<!-- 设置弹窗 -->
+<!-- 设置弹窗 - AI 提供商管理 -->
 <div id="modal-settings" class="fixed inset-0 bg-black/60 hidden z-50 flex items-center justify-center">
-    <div class="bg-bg-light border border-border rounded-lg w-[420px]">
+    <div class="bg-bg-light border border-border rounded-lg w-[560px] max-h-[80vh] flex flex-col">
         <div class="flex items-center justify-between p-4 border-b border-border">
-            <h3 class="text-sm font-medium">AI 设置</h3>
+            <h3 class="text-sm font-medium">AI 模型管理</h3>
             <button class="modal-close text-muted hover:text-gray-300">&times;</button>
         </div>
-        <div class="p-4 space-y-3 text-sm">
-            <div>
-                <label class="text-xs text-muted">API Key</label>
-                <input id="ai-api-key" type="password" placeholder="sk-..." class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
+        <div class="p-4 flex-1 overflow-auto">
+            <!-- 已有提供商列表 -->
+            <div id="provider-list" class="space-y-2 mb-4"></div>
+            <!-- 新建/编辑表单 -->
+            <div class="border-t border-border pt-4">
+                <h4 class="text-xs text-muted mb-3" id="provider-form-title">添加 AI 提供商</h4>
+                <input type="hidden" id="provider-edit-id">
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="col-span-2">
+                        <label class="text-xs text-muted">提供商名称</label>
+                        <input id="provider-name" placeholder="如: DeepSeek, 智谱GLM" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="text-xs text-muted">API Base URL</label>
+                        <input id="provider-base-url" placeholder="https://api.deepseek.com" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
+                    </div>
+                    <div>
+                        <label class="text-xs text-muted">API Key</label>
+                        <input id="provider-api-key" type="password" placeholder="sk-..." class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
+                    </div>
+                    <div>
+                        <label class="text-xs text-muted">模型名称</label>
+                        <input id="provider-model" placeholder="deepseek-chat" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
+                    </div>
+                    <div>
+                        <label class="text-xs text-muted">Temperature</label>
+                        <input id="provider-temperature" type="number" step="0.1" value="0" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-3">
+                    <button id="btn-save-provider" class="bg-accent hover:bg-accent-light text-white text-sm px-4 py-1.5 rounded">保存</button>
+                    <button id="btn-cancel-provider" class="bg-bg border border-border hover:border-muted text-sm px-4 py-1.5 rounded hidden">取消编辑</button>
+                </div>
             </div>
-            <div>
-                <label class="text-xs text-muted">API Base URL</label>
-                <input id="ai-base-url" value="https://api.deepseek.com" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
-            </div>
-            <div>
-                <label class="text-xs text-muted">模型名称</label>
-                <input id="ai-model" value="deepseek-chat" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
-            </div>
-            <div>
-                <label class="text-xs text-muted">Temperature</label>
-                <input id="ai-temperature" type="number" step="0.1" value="0" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light">
-            </div>
-            <button id="btn-save-settings" class="bg-accent hover:bg-accent-light text-white text-sm px-4 py-1.5 rounded w-full">保存配置</button>
         </div>
     </div>
 </div>
@@ -169,4 +193,49 @@
         </div>
     </div>
 </div>
+    </div>
+
+    <!-- 单元格编辑弹窗 -->
+    <div id="modal-cell-edit" class="fixed inset-0 bg-black/60 hidden z-50 flex items-center justify-center">
+        <div class="bg-bg-light border border-border rounded-lg w-[520px]">
+            <div class="flex items-center justify-between p-4 border-b border-border">
+                <h3 class="text-sm font-medium">编辑数据</h3>
+                <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div class="grid grid-cols-3 gap-3 text-xs">
+                    <div>
+                        <span class="text-muted">表</span>
+                        <div id="cell-edit-table" class="font-mono text-gray-300 mt-1">-</div>
+                    </div>
+                    <div>
+                        <span class="text-muted">列</span>
+                        <div id="cell-edit-column" class="font-mono text-gray-300 mt-1">-</div>
+                    </div>
+                    <div>
+                        <span class="text-muted">定位条件</span>
+                        <div id="cell-edit-where" class="font-mono text-yellow-400 mt-1 truncate" title="">-</div>
+                    </div>
+                </div>
+                <div>
+                    <div class="flex items-center gap-3 mb-2">
+                        <label class="text-xs text-muted shrink-0">原始值</label>
+                        <code id="cell-edit-old" class="text-xs text-muted bg-bg px-2 py-0.5 rounded flex-1 truncate">-</code>
+                    </div>
+                    <div>
+                        <label class="text-xs text-muted block mb-1">新值</label>
+                        <textarea id="cell-edit-new" rows="6" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-accent-light resize-y"></textarea>
+                    </div>
+                    <div class="flex items-center gap-2 mt-1.5">
+                        <input id="cell-edit-null" type="checkbox" class="accent-red-500">
+                        <label for="cell-edit-null" class="text-xs text-muted cursor-pointer">设为 NULL</label>
+                    </div>
+                </div>
+                <div class="flex gap-2 justify-end pt-1">
+                    <button id="btn-cell-edit-cancel" class="bg-bg border border-border hover:border-muted text-sm px-4 py-1.5 rounded">取消</button>
+                    <button id="btn-cell-edit-ok" class="bg-red-600 hover:bg-red-700 text-white text-sm px-4 py-1.5 rounded">确认修改</button>
+                </div>
+            </div>
+        </div>
+    </div>
 {% endblock %}

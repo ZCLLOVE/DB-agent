@@ -57,20 +57,24 @@ function bindEvents() {
     $('#btn-open-ai').onclick = () => createAiTab();
 
     // 设置
-    $('#btn-settings').onclick = () => openModal('modal-settings');
-    $('#btn-save-settings').onclick = saveAiConfig;
+    $('#btn-settings').onclick = () => {
+        resetProviderForm();
+        openModal('modal-settings');
+    };
+    $('#btn-save-provider').onclick = saveProvider;
+    $('#btn-cancel-provider').onclick = resetProviderForm;
 
     // SQL 确认弹窗
     $('#btn-confirm-cancel').onclick = () => closeModal('modal-confirm');
     $('#btn-confirm-ok').onclick = confirmExecuteSql;
 
-    // 侧边栏收起
-    $('#btn-sidebar-toggle').onclick = () => {
-        const sb = $('#sidebar');
-        sb.classList.toggle('collapsed');
-        const btn = $('#btn-sidebar-toggle');
-        btn.textContent = sb.classList.contains('collapsed') ? '>' : '<';
-    };
+    // 侧边栏拖拽调整宽度
+    initSidebarResize();
+
+    // 表名筛选
+    $('#table-filter').addEventListener('input', (e) => {
+        filterTableTree(e.target.value.trim().toLowerCase());
+    });
 
     // 关闭弹窗
     $$('.modal-close').forEach(btn => {
@@ -135,6 +139,7 @@ function renderConnList() {
             </div>
             <div class="flex gap-1">
                 <button class="text-xs text-muted hover:text-gray-300 px-1" onclick="editConnection(${c.id})">编辑</button>
+                <button class="text-xs text-blue-400 hover:text-blue-300 px-1" onclick="cloneConnection(${c.id})">复制到新库</button>
                 <button class="text-xs text-red-400 hover:text-red-300 px-1" onclick="deleteConnection(${c.id})">删除</button>
             </div>
         `;
@@ -207,6 +212,21 @@ function editConnection(id) {
     $('#conn-form-title').textContent = '编辑连接';
 }
 
+function cloneConnection(id) {
+    const conn = state.connections.find(c => c.id === id);
+    if (!conn) return;
+    $('#conn-edit-id').value = '';
+    $('#conn-name').value = conn.name + ' (副本)';
+    $('#conn-db-type').value = conn.db_type;
+    $('#conn-host').value = conn.host || '';
+    $('#conn-port').value = conn.port || 3306;
+    $('#conn-username').value = conn.username || '';
+    $('#conn-password').value = conn.password || '';
+    $('#conn-database').value = '';
+    $('#conn-form-title').textContent = '复制为新连接';
+    $('#conn-database').focus();
+}
+
 async function deleteConnection(id) {
     if (!confirm('确定删除该连接？')) return;
     try {
@@ -274,36 +294,72 @@ async function loadTableTree() {
             return;
         }
 
-        tree.innerHTML = '';
-        tables.forEach(t => {
-            const item = document.createElement('div');
-            item.className = 'tree-item';
-            item.dataset.table = t.name;
-            item.dataset.type = t.type;
-            item.innerHTML = `
-                <span class="tree-toggle">▸</span>
-                <span class="tree-icon">${t.type === 'view' ? '👁' : '📋'}</span>
-                <span class="tree-label">${escapeHtml(t.name)}</span>
-            `;
-            item.onclick = (e) => {
-                e.stopPropagation();
-                toggleTreeNode(item, t.name);
-            };
-            // 右键菜单
-            item.oncontextmenu = (e) => {
-                e.preventDefault();
-                showTableContextMenu(e, t.name);
-            };
-            // 双击查看数据
-            item.ondblclick = (e) => {
-                e.stopPropagation();
-                showTableData(t.name);
-            };
-            tree.appendChild(item);
-        });
+        renderTableTreeItems(tables);
     } catch (e) {
         tree.innerHTML = `<div class="text-red-400 text-center py-4 text-xs">${escapeHtml(e.message)}</div>`;
     }
+}
+
+function renderTableTreeItems(tables) {
+    const tree = $('#table-tree');
+    const filter = ($('#table-filter').value || '').trim().toLowerCase();
+    tree.innerHTML = '';
+
+    tables.forEach(t => {
+        // 筛选逻辑：匹配表名或备注
+        if (filter) {
+            const nameMatch = t.name.toLowerCase().includes(filter);
+            const commentMatch = (t.comment || '').toLowerCase().includes(filter);
+            if (!nameMatch && !commentMatch) return;
+        }
+
+        const item = document.createElement('div');
+        item.className = 'tree-item';
+        item.dataset.table = t.name;
+        item.dataset.type = t.type;
+        item.dataset.comment = t.comment || '';
+
+        // 悬停提示：表名 + 备注
+        const tooltip = t.comment ? `${t.name} — ${t.comment}` : t.name;
+        item.title = tooltip;
+
+        item.innerHTML = `
+            <span class="tree-icon">${t.type === 'view' ? '👁' : '📋'}</span>
+            <span class="tree-label">${escapeHtml(t.name)}</span>
+            ${t.comment ? `<span class="tree-comment-text">${escapeHtml(t.comment)}</span>` : ''}
+            <button class="tree-query-btn" title="查看前200条数据">▶</button>
+        `;
+
+        // 左键单击表名 → 插入标签到 AI 对话输入框
+        item.onclick = (e) => {
+            if (e.target.closest('.tree-query-btn')) return; // 排除查询按钮
+            e.stopPropagation();
+            insertTableTagIntoAi(t.name);
+        };
+
+        // 查询按钮 → 查看表数据
+        item.querySelector('.tree-query-btn').onclick = (e) => {
+            e.stopPropagation();
+            showTableData(t.name);
+        };
+
+        // 右键菜单（含展开字段、DDL、SELECT 等）
+        item.oncontextmenu = (e) => {
+            e.preventDefault();
+            showTableContextMenu(e, t.name);
+        };
+        tree.appendChild(item);
+    });
+
+    if (tree.children.length === 0) {
+        tree.innerHTML = '<div class="text-muted text-center py-4 text-xs">无匹配结果</div>';
+    }
+}
+
+function filterTableTree(keyword) {
+    const tables = state.tableData[state.currentConnId];
+    if (!tables) return;
+    renderTableTreeItems(tables);
 }
 
 async function toggleTreeNode(item, tableName) {
@@ -360,6 +416,7 @@ function showTableContextMenu(e, tableName) {
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
     menu.innerHTML = `
+        <div class="context-menu-item" data-action="columns">展开字段</div>
         <div class="context-menu-item" data-action="data">查看数据（前200条）</div>
         <div class="context-menu-item" data-action="ddl">查看建表语句</div>
         <div class="context-menu-item" data-action="select">生成 SELECT *</div>
@@ -370,6 +427,7 @@ function showTableContextMenu(e, tableName) {
         const action = ev.target.dataset.action;
         menu.remove();
         switch (action) {
+            case 'columns': showTableColumnsPopup(tableName); break;
             case 'data': showTableData(tableName); break;
             case 'ddl': showTableDdl(tableName); break;
             case 'select': insertSelectSql(tableName); break;
@@ -378,10 +436,52 @@ function showTableContextMenu(e, tableName) {
     };
 
     document.body.appendChild(menu);
-    // 点击其他地方关闭
     setTimeout(() => {
         document.addEventListener('click', () => menu.remove(), { once: true });
     }, 10);
+}
+
+// 右键"展开字段"：在侧边栏树节点内联展开
+async function showTableColumnsPopup(tableName) {
+    // 找到对应的树节点
+    const treeItem = document.querySelector(`#table-tree .tree-item[data-table="${CSS.escape(tableName)}"]`);
+    if (!treeItem) return;
+
+    // 如果已展开，收起
+    const existing = treeItem.querySelector('.tree-children');
+    if (existing) {
+        existing.remove();
+        treeItem.classList.remove('active');
+        return;
+    }
+
+    treeItem.classList.add('active');
+
+    try {
+        const data = await api('GET', `/api/connections/${state.currentConnId}/tables/${encodeURIComponent(tableName)}/columns`);
+        const columns = data.columns || [];
+        const childDiv = document.createElement('div');
+        childDiv.className = 'tree-children';
+
+        columns.forEach(col => {
+            const colItem = document.createElement('div');
+            colItem.className = 'tree-item';
+            let badges = '';
+            if (col.primary_key) badges += '<span class="tree-column-badge badge-pk">PK</span>';
+            colItem.innerHTML = `
+                <span class="tree-icon" style="color:#5a8a7a">◇</span>
+                <span class="tree-label">${escapeHtml(col.name)}</span>
+                <span class="tree-column-type">${escapeHtml(col.type)}</span>
+                ${badges}
+            `;
+            colItem.title = `${col.name}: ${col.type}${col.primary_key ? ' (PK)' : ''}${col.comment ? ' -- ' + col.comment : ''}`;
+            childDiv.appendChild(colItem);
+        });
+
+        treeItem.appendChild(childDiv);
+    } catch (e) {
+        treeItem.classList.remove('active');
+    }
 }
 
 async function showTableData(tableName) {
@@ -389,17 +489,45 @@ async function showTableData(tableName) {
     if (!tab) {
         createSqlTab();
     }
-    // 确保有活动的SQL tab
     await new Promise(r => setTimeout(r, 50));
     const activeTab = getActiveSqlTab();
     if (!activeTab) return;
 
     try {
         const data = await api('GET', `/api/connections/${state.currentConnId}/tables/${encodeURIComponent(tableName)}/data`);
-        renderResultTable(activeTab.id, data.columns, data.rows);
-        // 更新结果信息
+        data.tableName = tableName;  // 标记来源表（用于可编辑模式）
+        activeTab._tableData = { columns: data.columns, rows: data.rows }; // 保存供问AI用
+        renderResultTable(activeTab.id, data);
         const infoEl = document.querySelector(`#tab-panel-${activeTab.id} .sql-result-info`);
-        if (infoEl) infoEl.innerHTML = `<span>表: ${escapeHtml(tableName)} | ${data.rows.length} 行</span>`;
+        const pkInfo = (data.primary_keys && data.primary_keys.length > 0)
+            ? '' : '<span class="text-yellow-500 ml-2">(无主键，不可编辑)</span>';
+        if (infoEl) {
+            infoEl.innerHTML = `
+                <span>表: ${escapeHtml(tableName)} | ${data.rows.length} 行${pkInfo}</span>
+                <span class="flex items-center gap-2">
+                    <label class="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" class="accent-red-500" id="data-select-all-${activeTab.id}"> <span class="text-xs">全选</span>
+                    </label>
+                    <button class="bg-primary hover:bg-red-500 text-white text-xs px-3 py-0.5 rounded" id="data-ask-ai-${activeTab.id}">问 AI</button>
+                </span>
+            `;
+            const resultWrapper = document.getElementById(`sql-result-${activeTab.id}`);
+            infoEl.querySelector(`#data-select-all-${activeTab.id}`).onchange = (e) => {
+                resultWrapper.querySelectorAll('.data-row-cb').forEach(cb => cb.checked = e.target.checked);
+            };
+            infoEl.querySelector(`#data-ask-ai-${activeTab.id}`).onclick = () => {
+                const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
+                if (checked.length === 0) { alert('请先勾选数据行'); return; }
+                const selectedData = Array.from(checked).map(cb => {
+                    const idx = parseInt(cb.dataset.rowIdx);
+                    const row = data.rows[idx];
+                    const obj = {};
+                    data.columns.forEach((col, i) => { obj[col] = row[i]; });
+                    return JSON.stringify(obj);
+                });
+                sendHistoryToAi(selectedData);
+            };
+        }
     } catch (e) {
         alert('加载数据失败: ' + e.message);
     }
@@ -433,6 +561,36 @@ async function showTableRowCount(tableName) {
     } catch (e) {
         alert('获取行数失败: ' + e.message);
     }
+}
+
+/** 重新绑定结果信息栏里的全选+问AI按钮事件（tab切换恢复后调用） */
+function rebindDataActionBar(tabId) {
+    const tab = state.tabs.find(t => t.id === tabId);
+    const info = document.getElementById(`sql-result-info-${tabId}`);
+    const resultWrapper = document.getElementById(`sql-result-${tabId}`);
+    if (!tab || !info || !resultWrapper) return;
+
+    const selectAllCb = info.querySelector(`#data-select-all-${tabId}`);
+    const askAiBtn = info.querySelector(`#data-ask-ai-${tabId}`);
+    if (!selectAllCb || !askAiBtn) return;
+
+    selectAllCb.onchange = (e) => {
+        resultWrapper.querySelectorAll('.data-row-cb').forEach(cb => cb.checked = e.target.checked);
+    };
+    askAiBtn.onclick = () => {
+        const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
+        if (checked.length === 0) { alert('请先勾选数据行'); return; }
+        const td = tab._tableData;
+        if (!td) { alert('数据已过期，请重新查询'); return; }
+        const selectedData = Array.from(checked).map(cb => {
+            const idx = parseInt(cb.dataset.rowIdx);
+            const row = td.rows[idx];
+            const obj = {};
+            td.columns.forEach((col, i) => { obj[col] = row[i]; });
+            return JSON.stringify(obj);
+        });
+        sendHistoryToAi(selectedData);
+    };
 }
 
 // ==================== Tab 管理 ====================
@@ -542,6 +700,24 @@ function renderTabContent() {
     // 隐藏空状态
     if (emptyState) emptyState.style.display = 'none';
 
+    // 切换前保存所有 tab 状态
+    state.tabs.forEach(t => {
+        if (t.type === 'ai') {
+            const input = document.getElementById(`chat-input-${t.id}`);
+            if (input) t._savedInputHtml = input.innerHTML;
+        }
+        if (t.type === 'sql') {
+            if (t.editor) {
+                t.sql = t.editor.getValue();
+                t.editor = null;
+            }
+            const result = document.getElementById(`sql-result-${t.id}`);
+            if (result) t._savedResultHtml = result.innerHTML;
+            const info = document.getElementById(`sql-result-info-${t.id}`);
+            if (info) t._savedResultInfo = info.innerHTML;
+        }
+    });
+
     // 清除旧内容但保留空状态元素
     Array.from(container.children).forEach(child => {
         if (child.id !== 'empty-state') child.remove();
@@ -550,9 +726,27 @@ function renderTabContent() {
     if (tab.type === 'sql') {
         const panel = createSqlPanel(tab);
         container.appendChild(panel);
+        // 恢复结果区内容
+        if (tab._savedResultHtml) {
+            setTimeout(() => {
+                const result = document.getElementById(`sql-result-${tab.id}`);
+                if (result) result.innerHTML = tab._savedResultHtml;
+                const info = document.getElementById(`sql-result-info-${tab.id}`);
+                if (info && tab._savedResultInfo) info.innerHTML = tab._savedResultInfo;
+                // 重新绑定 info 栏里的按钮事件
+                rebindDataActionBar(tab.id);
+            }, 30);
+        }
     } else if (tab.type === 'ai') {
         const panel = createAiPanel(tab);
         container.appendChild(panel);
+        // 恢复 AI 输入框内容
+        if (tab._savedInputHtml) {
+            setTimeout(() => {
+                const input = document.getElementById(`chat-input-${tab.id}`);
+                if (input) input.innerHTML = tab._savedInputHtml;
+            }, 20);
+        }
     }
 }
 
@@ -637,7 +831,9 @@ function createAiPanel(tab) {
     panel.innerHTML = `
         <div class="chat-messages" id="chat-messages-${tab.id}"></div>
         <div class="chat-input-area">
-            <textarea id="chat-input-${tab.id}" placeholder="用自然语言描述你的需求...（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+            <div id="chat-input-${tab.id}" contenteditable="true"
+                 class="chat-editable"
+                 data-placeholder="用自然语言描述需求，点击左侧表名插入表标签...（Enter 发送，Shift+Enter 换行）"></div>
             <button id="chat-send-${tab.id}">发送</button>
         </div>
     `;
@@ -654,17 +850,35 @@ function createAiPanel(tab) {
         const input = panel.querySelector(`#chat-input-${tab.id}`);
         const sendBtn = panel.querySelector(`#chat-send-${tab.id}`);
 
-        // 自动调整高度
-        input.addEventListener('input', () => {
-            input.style.height = 'auto';
-            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-        });
-
-        // Enter 发送
+        // Enter 发送，Shift+Enter 换行
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendAiMessage(tab.id);
+            }
+        });
+
+        // 标签拖拽支持：允许在输入框内拖动标签改变位置
+        input.addEventListener('dragover', (e) => {
+            if (e.dataTransfer.types.includes('application/table-tag') ||
+                e.dataTransfer.types.includes('application/sql-tag')) {
+                e.preventDefault();
+            }
+        });
+        input.addEventListener('drop', (e) => {
+            const isTableTag = e.dataTransfer && e.dataTransfer.types.includes('application/table-tag');
+            const isSqlTag = e.dataTransfer && e.dataTransfer.types.includes('application/sql-tag');
+            if (isTableTag || isSqlTag) {
+                e.preventDefault();
+                e.stopPropagation();
+                const draggedTag = input.querySelector('.table-tag.dragging, .sql-tag.dragging');
+                if (!draggedTag) return;
+                // 在鼠标位置插入标签
+                const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+                if (range && input.contains(range.commonAncestorContainer)) {
+                    range.insertNode(draggedTag);
+                    draggedTag.after(document.createTextNode('\u00A0'));
+                }
             }
         });
 
@@ -710,26 +924,9 @@ async function executeSql(tabId) {
     }
 }
 
-async function confirmExecuteSql() {
-    closeModal('modal-confirm');
-    if (!pendingConfirmSql || !pendingConfirmTabId) return;
-
-    try {
-        const result = await api('POST', `/api/connections/${state.currentConnId}/sql`, {
-            sql: pendingConfirmSql,
-            confirmed: true,
-        });
-        renderSqlResult(pendingConfirmTabId, result);
-    } catch (e) {
-        renderSqlError(pendingConfirmTabId, e.message);
-    }
-    pendingConfirmTabId = null;
-    pendingConfirmSql = null;
-}
-
 function renderSqlResult(tabId, result) {
     if (result.type === 'query') {
-        renderResultTable(tabId, result.columns, result.rows);
+        renderResultTable(tabId, { columns: result.columns, rows: result.rows });
         updateResultInfo(tabId, `${result.rowcount} 行`);
     } else {
         const wrapper = document.getElementById(`sql-result-${tabId}`);
@@ -744,43 +941,59 @@ function renderSqlError(tabId, message) {
     updateResultInfo(tabId, '执行错误');
 }
 
-function renderResultTable(tabId, columns, rows) {
+function renderResultTable(tabId, data) {
     const wrapper = document.getElementById(`sql-result-${tabId}`);
     if (!wrapper) return;
+
+    const columns = Array.isArray(data) ? data : (data.columns || []);
+    const rows = Array.isArray(data) ? arguments[2] : (data.rows || []);
+    const columnMeta = (!Array.isArray(data) && data.column_meta) ? data.column_meta : [];
+    const pkColumns = (!Array.isArray(data) && data.primary_keys) ? data.primary_keys : [];
+    const tableName = (!Array.isArray(data) && data.tableName) ? data.tableName : null;
 
     if (!columns || columns.length === 0) {
         wrapper.innerHTML = '<div class="text-muted text-center py-8 text-xs">无数据</div>';
         return;
     }
 
-    let sortCol = -1, sortAsc = true;
+    // 构建 列名 → 注释 映射
+    const commentMap = {};
+    columnMeta.forEach(c => { commentMap[c.name] = c.comment; });
 
+    // 编辑状态
+    const isEditable = tableName && pkColumns.length > 0;
+    const pkColIndices = pkColumns.map(pk => columns.indexOf(pk)).filter(i => i >= 0);
+
+    // 引用值用于 SQL（处理字符串、NULL）
+    function sqlVal(v) {
+        if (v === null || v === undefined || v === 'NULL') return 'NULL';
+        if (typeof v === 'number') return String(v);
+        return "'" + String(v).replace(/'/g, "''") + "'";
+    }
+
+    let sortCol = -1, sortAsc = true;
     const table = document.createElement('table');
     table.className = 'data-table';
 
-    // 表头
+    // 表头 — 带列注释
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
     columns.forEach((col, i) => {
         const th = document.createElement('th');
-        th.textContent = col;
+        const comment = commentMap[col];
+        if (comment) {
+            th.innerHTML = `${escapeHtml(col)}<span class="th-comment">(${escapeHtml(comment)})</span>`;
+        } else {
+            th.textContent = col;
+        }
         th.onclick = () => {
-            if (sortCol === i) {
-                sortAsc = !sortAsc;
-            } else {
-                sortCol = i;
-                sortAsc = true;
-            }
+            if (sortCol === i) sortAsc = !sortAsc;
+            else { sortCol = i; sortAsc = true; }
             rows.sort((a, b) => {
                 const va = a[i] ?? '', vb = b[i] ?? '';
-                const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true });
-                return sortAsc ? cmp : -cmp;
+                return String(va).localeCompare(String(vb), undefined, { numeric: true }) * (sortAsc ? 1 : -1);
             });
             renderRows();
-            // 更新排序指示
-            headerRow.querySelectorAll('th').forEach((h, j) => {
-                h.textContent = columns[j] + (j === i ? (sortAsc ? ' ▲' : ' ▼') : '');
-            });
         };
         headerRow.appendChild(th);
     });
@@ -792,9 +1005,15 @@ function renderResultTable(tabId, columns, rows) {
 
     function renderRows() {
         tbody.innerHTML = '';
-        rows.forEach(row => {
+        rows.forEach((row, rowIdx) => {
             const tr = document.createElement('tr');
-            row.forEach(cell => {
+            // 勾选框
+            const tdCb = document.createElement('td');
+            tdCb.style.cssText = 'width:30px;text-align:center;padding:3px 2px';
+            tdCb.innerHTML = `<input type="checkbox" class="data-row-cb accent-red-500" data-row-idx="${rowIdx}">`;
+            tdCb.onclick = (e) => e.stopPropagation();
+            tr.appendChild(tdCb);
+            row.forEach((cell, colIdx) => {
                 const td = document.createElement('td');
                 if (cell === null || cell === undefined) {
                     td.textContent = 'NULL';
@@ -803,12 +1022,25 @@ function renderResultTable(tabId, columns, rows) {
                     td.textContent = String(cell);
                 }
                 td.title = String(cell ?? 'NULL');
+                td.dataset.row = rowIdx;
+                td.dataset.col = colIdx;
+
+                // 单击复制
                 td.onclick = () => {
-                    // 点击复制
+                    if (td.querySelector('input')) return; // 编辑中不复制
                     navigator.clipboard.writeText(String(cell ?? '')).catch(() => {});
                     td.style.background = 'rgba(233, 69, 96, 0.15)';
                     setTimeout(() => td.style.background = '', 300);
                 };
+
+                // 双击编辑（仅可编辑表）— 弹窗方式
+                if (isEditable) {
+                    td.ondblclick = (e) => {
+                        e.stopPropagation();
+                        openCellEditModal(td, rowIdx, colIdx, cell, row);
+                    };
+                }
+
                 tr.appendChild(td);
             });
             tbody.appendChild(tr);
@@ -818,6 +1050,94 @@ function renderResultTable(tabId, columns, rows) {
 
     wrapper.innerHTML = '';
     wrapper.appendChild(table);
+
+    // 更新保存按钮状态
+    refreshSaveBtn();
+
+    // ---- 单元格编辑弹窗 ----
+    function openCellEditModal(td, rowIdx, colIdx, originalValue, row) {
+        const colName = columns[colIdx];
+        const comment = commentMap[colName] || '';
+
+        // 构建定位条件
+        const whereParts = pkColIndices.map(pkIdx => {
+            return `\`${columns[pkIdx]}\` = ${sqlVal(row[pkIdx])}`;
+        });
+        const whereStr = whereParts.join(' AND ');
+
+        // 填充弹窗信息
+        $('#cell-edit-table').textContent = tableName;
+        $('#cell-edit-column').textContent = comment ? `${colName} (${comment})` : colName;
+        $('#cell-edit-where').textContent = whereStr;
+        $('#cell-edit-where').title = whereStr;
+        $('#cell-edit-old').textContent = originalValue === null ? 'NULL' : String(originalValue);
+
+        const newInput = $('#cell-edit-new');
+        newInput.value = originalValue === null ? '' : String(originalValue);
+        const nullCheckbox = $('#cell-edit-null');
+        nullCheckbox.checked = (originalValue === null);
+
+        newInput.oninput = () => {};
+        nullCheckbox.onchange = () => {
+            newInput.disabled = nullCheckbox.checked;
+        };
+        newInput.disabled = nullCheckbox.checked;
+
+        openModal('modal-cell-edit');
+        setTimeout(() => newInput.focus(), 100);
+
+        // 确认按钮 — 执行 SQL
+        $('#btn-cell-edit-ok').onclick = async () => {
+            const isNull = nullCheckbox.checked;
+            const newVal = isNull ? null : newInput.value.trim() || null;
+            const sql = `UPDATE \`${tableName}\` SET \`${colName}\` = ${sqlVal(newVal)} WHERE ${whereStr};`;
+
+            closeModal('modal-cell-edit');
+            try {
+                const result = await api('POST', `/api/connections/${state.currentConnId}/sql`, {
+                    sql: sql, confirmed: true,
+                });
+                // 更新本地数据
+                rows[rowIdx][colIdx] = newVal;
+                renderRows();
+                updateResultInfo(tabId, `已修改: ${colName}`);
+            } catch (e) {
+                alert('修改失败: ' + e.message);
+            }
+        };
+        $('#btn-cell-edit-cancel').onclick = () => closeModal('modal-cell-edit');
+    }
+
+    function refreshSaveBtn() {
+        // 无需批量保存按钮了（每次双击直接弹窗执行）
+    }
+
+    async function saveCellEdits() {
+        // 保留接口兼容，实际逻辑已在弹窗中处理
+    }
+}
+
+// 保存成功回调
+let pendingConfirmOnSuccess = null;
+
+// 修改原有确认执行，加入成功回调
+async function confirmExecuteSql() {
+    closeModal('modal-confirm');
+    if (!pendingConfirmSql || !pendingConfirmTabId) return;
+
+    try {
+        const result = await api('POST', `/api/connections/${state.currentConnId}/sql`, {
+            sql: pendingConfirmSql,
+            confirmed: true,
+        });
+        renderSqlResult(pendingConfirmTabId, result);
+        if (pendingConfirmOnSuccess) pendingConfirmOnSuccess();
+    } catch (e) {
+        renderSqlError(pendingConfirmTabId, e.message);
+    }
+    pendingConfirmTabId = null;
+    pendingConfirmSql = null;
+    pendingConfirmOnSuccess = null;
 }
 
 function updateResultInfo(tabId, text) {
@@ -870,24 +1190,55 @@ async function showHistory(tabId) {
             return;
         }
 
+        // 顶部操作栏
+        const toolbar = document.createElement('div');
+        toolbar.className = 'flex items-center gap-2 px-3 py-1.5 border-b border-border bg-bg-light text-xs';
+        toolbar.innerHTML = `
+            <label class="flex items-center gap-1 text-muted cursor-pointer">
+                <input type="checkbox" id="history-select-all-${tabId}" class="accent-red-500"> 全选
+            </label>
+            <button id="history-ask-ai-${tabId}" class="bg-primary hover:bg-red-500 text-white text-xs px-3 py-1 rounded ml-auto">问 AI</button>
+        `;
+        wrapper.appendChild(toolbar);
+
+        const list = document.createElement('div');
+        wrapper.appendChild(list);
+
         records.forEach(r => {
             const div = document.createElement('div');
-            div.className = 'flex items-start gap-2 px-3 py-2 border-b border-border hover:bg-bg-lighter cursor-pointer text-xs';
+            div.className = 'flex items-start gap-2 px-3 py-2 border-b border-border hover:bg-bg-lighter text-xs';
             div.innerHTML = `
-                <span class="${r.status === 'success' ? 'status-success' : 'status-error'}">●</span>
-                <div class="flex-1 min-w-0">
+                <input type="checkbox" class="history-cb accent-red-500 mt-0.5 shrink-0" data-sql="${escapeHtml(r.sql)}">
+                <div class="flex-1 min-w-0 cursor-pointer">
                     <div class="font-mono truncate">${escapeHtml(r.sql)}</div>
                     <div class="text-muted mt-0.5">${r.executed_at || ''} | ${r.rows_affected}行${r.error_message ? ' | ' + escapeHtml(r.error_message) : ''}</div>
                 </div>
             `;
-            div.onclick = () => {
+            // 点击内容区域填充到编辑器
+            div.querySelector('.flex-1').onclick = () => {
                 const tab = state.tabs.find(t => t.id === tabId);
                 if (tab && tab.editor) {
                     tab.editor.setValue(r.sql);
                 }
             };
-            wrapper.appendChild(div);
+            list.appendChild(div);
         });
+
+        // 全选
+        wrapper.querySelector(`#history-select-all-${tabId}`).onchange = (e) => {
+            list.querySelectorAll('.history-cb').forEach(cb => cb.checked = e.target.checked);
+        };
+
+        // 问 AI
+        wrapper.querySelector(`#history-ask-ai-${tabId}`).onclick = () => {
+            const checked = list.querySelectorAll('.history-cb:checked');
+            if (checked.length === 0) {
+                alert('请先勾选要提问的 SQL');
+                return;
+            }
+            const sqls = Array.from(checked).map(cb => cb.dataset.sql);
+            sendHistoryToAi(sqls);
+        };
 
         updateResultInfo(tabId, `历史记录 (${records.length} 条)`);
     } catch (e) {
@@ -895,20 +1246,133 @@ async function showHistory(tabId) {
     }
 }
 
+function sendHistoryToAi(sqls) {
+    // 确保 AI tab 存在
+    let aiTab = state.tabs.find(t => t.type === 'ai');
+    const alreadyActive = aiTab && state.activeTabId === aiTab.id;
+    if (!aiTab) {
+        createAiTab();
+        aiTab = state.tabs.find(t => t.type === 'ai');
+    }
+    if (!aiTab) return;
+
+    if (!alreadyActive) {
+        activateTab(aiTab.id);
+    }
+
+    const delay = alreadyActive ? 0 : 80;
+    setTimeout(() => {
+        const input = document.getElementById(`chat-input-${aiTab.id}`);
+        if (!input) return;
+        input.focus();
+
+        // 创建 SQL 标签并插入
+        sqls.forEach(sql => {
+            const tag = createSqlTagElement(sql);
+            // 尝试在光标位置插入
+            const sel = window.getSelection();
+            let inserted = false;
+            if (sel.rangeCount) {
+                const range = sel.getRangeAt(0);
+                if (input.contains(range.commonAncestorContainer)) {
+                    range.insertNode(tag);
+                    range.collapse(false);
+                    inserted = true;
+                }
+            }
+            if (!inserted) {
+                input.appendChild(tag);
+            }
+            // 标签后加空格分隔
+            const sp = document.createTextNode('\u00A0');
+            tag.after(sp);
+        });
+
+        // 光标移到末尾
+        const sel = window.getSelection();
+        const newRange = document.createRange();
+        newRange.selectNodeContents(input);
+        newRange.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    }, delay);
+}
+
+function createSqlTagElement(sql) {
+    const tag = document.createElement('span');
+    tag.className = 'sql-tag';
+    tag.contentEditable = 'false';
+    tag.draggable = true;
+    tag.dataset.sql = sql;
+    tag.title = sql;
+
+    const label = document.createElement('span');
+    label.className = 'sql-label';
+    label.textContent = sql.length > 50 ? sql.substring(0, 50) + '...' : sql;
+    tag.appendChild(label);
+
+    const removeBtn = document.createElement('span');
+    removeBtn.className = 'tag-remove';
+    removeBtn.textContent = '×';
+    removeBtn.onmousedown = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+    removeBtn.onclick = (e) => {
+        e.stopPropagation();
+        tag.remove();
+    };
+    tag.appendChild(removeBtn);
+
+    // 拖拽
+    tag.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', 'sql-tag');
+        e.dataTransfer.setData('application/sql-tag', sql);
+        tag.classList.add('dragging');
+    });
+    tag.addEventListener('dragend', () => {
+        tag.classList.remove('dragging');
+    });
+
+    return tag;
+}
+
 // ==================== AI 对话 ====================
+
+/** 从 contenteditable 输入框提取消息文本（标签转 `table_name`） */
+function extractChatInput(div) {
+    let text = '';
+    div.childNodes.forEach(node => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            text += node.textContent;
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.classList && node.classList.contains('table-tag')) {
+                text += '`' + node.dataset.table + '`';
+            } else if (node.classList && node.classList.contains('sql-tag')) {
+                text += '`' + node.dataset.sql + '`';
+            } else if (node.tagName === 'BR') {
+                text += '\n';
+            } else {
+                // 递归处理嵌套内容
+                text += extractChatInput(node);
+            }
+        }
+    });
+    return text;
+}
+
 async function sendAiMessage(tabId) {
     const tab = state.tabs.find(t => t.id === tabId);
     if (!tab || tab.type !== 'ai') return;
 
     const input = document.getElementById(`chat-input-${tabId}`);
-    const message = input.value.trim();
+    const message = extractChatInput(input).trim();
     if (!message || !state.currentConnId) {
         if (!state.currentConnId) alert('请先选择数据库连接');
         return;
     }
 
-    input.value = '';
-    input.style.height = 'auto';
+    input.innerHTML = '';
 
     const messagesEl = document.getElementById(`chat-messages-${tabId}`);
 
@@ -1006,50 +1470,291 @@ function appendChatBubble(container, role, content) {
 }
 
 function formatMarkdown(text) {
-    // 简单的 Markdown 格式化
-    let html = escapeHtml(text);
-
-    // 代码块 ```sql ... ```
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-        return `<pre><code>${code.trim()}</code></pre>`;
-    });
-
-    // 行内代码
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // 粗体
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-
-    // 换行
-    html = html.replace(/\n/g, '<br>');
-
-    return html;
+    if (!text) return '';
+    if (typeof marked !== 'undefined') {
+        return marked.parse(text, { breaks: true });
+    }
+    // 降级：简单处理
+    return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
-// ==================== AI 配置 ====================
+// ==================== AI 配置（多提供商） ====================
 async function loadAiConfig() {
+    await loadProviders();
+}
+
+async function loadProviders() {
     try {
-        const config = await api('GET', '/api/ai/config');
-        $('#ai-api-key').value = config.api_key || '';
-        $('#ai-base-url').value = config.base_url || 'https://api.deepseek.com';
-        $('#ai-model').value = config.model || 'deepseek-chat';
-        $('#ai-temperature').value = config.temperature ?? 0;
+        const providers = await api('GET', '/api/ai/providers');
+        renderProviderList(providers);
+        renderProviderSelector(providers);
     } catch (e) {
-        console.error('加载AI配置失败:', e);
+        console.error('加载AI提供商失败:', e);
     }
 }
 
-async function saveAiConfig() {
+function renderProviderSelector(providers) {
+    const select = $('#ai-provider-select');
+    const activeId = providers.find(p => p.is_active)?.id;
+    select.innerHTML = '';
+    if (providers.length === 0) {
+        select.innerHTML = '<option value="">未配置 AI</option>';
+        return;
+    }
+    providers.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = `${p.name} / ${p.model}`;
+        opt.selected = p.is_active;
+        select.appendChild(opt);
+    });
+    // 切换提供商
+    select.onchange = async () => {
+        const id = parseInt(select.value);
+        if (!id) return;
+        try {
+            await api('POST', `/api/ai/providers/${id}/activate`);
+            await loadProviders();
+        } catch (e) {
+            alert('切换失败: ' + e.message);
+        }
+    };
+}
+
+function renderProviderList(providers) {
+    const container = $('#provider-list');
+    container.innerHTML = '';
+    if (providers.length === 0) {
+        container.innerHTML = '<div class="text-muted text-xs text-center py-4">暂无 AI 提供商，请添加</div>';
+        return;
+    }
+    providers.forEach(p => {
+        const div = document.createElement('div');
+        div.className = `flex items-center gap-2 p-2 rounded border ${p.is_active ? 'border-primary bg-primary/5' : 'border-border bg-bg'}`;
+        div.innerHTML = `
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium ${p.is_active ? 'text-primary' : 'text-gray-300'}">${escapeHtml(p.name)}</span>
+                    ${p.is_active ? '<span class="text-[10px] bg-primary/20 text-primary px-1.5 rounded">使用中</span>' : ''}
+                </div>
+                <div class="text-xs text-muted mt-0.5 truncate">${escapeHtml(p.model)} · ${escapeHtml(p.api_key)}</div>
+            </div>
+            <div class="flex gap-1 shrink-0">
+                ${!p.is_active ? `<button onclick="activateProvider(${p.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-accent-light hover:text-accent-light text-muted" title="切换到此模型">使用</button>` : ''}
+                <button onclick="editProvider(${p.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-muted text-muted" title="编辑">编辑</button>
+                <button onclick="deleteProvider(${p.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-red-500 hover:text-red-400 text-muted" title="删除">删除</button>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+async function activateProvider(id) {
     try {
-        await api('POST', '/api/ai/config', {
-            api_key: $('#ai-api-key').value,
-            base_url: $('#ai-base-url').value,
-            model: $('#ai-model').value,
-            temperature: parseFloat($('#ai-temperature').value),
-        });
-        closeModal('modal-settings');
-        alert('AI 配置已保存');
+        await api('POST', `/api/ai/providers/${id}/activate`);
+        await loadProviders();
+    } catch (e) {
+        alert('切换失败: ' + e.message);
+    }
+}
+
+function editProvider(id) {
+    // 从列表中找到数据填充表单
+    const container = $('#provider-list');
+    const providers = []; // we'll reload
+    api('GET', '/api/ai/providers').then(providers => {
+        const p = providers.find(x => x.id === id);
+        if (!p) return;
+        $('#provider-edit-id').value = p.id;
+        $('#provider-name').value = p.name;
+        $('#provider-base-url').value = p.base_url;
+        $('#provider-api-key').value = ''; // 不回显完整 key
+        $('#provider-api-key').placeholder = p.api_key || '不修改请留空';
+        $('#provider-model').value = p.model;
+        $('#provider-temperature').value = p.temperature;
+        $('#provider-form-title').textContent = '编辑 AI 提供商';
+        $('#btn-cancel-provider').classList.remove('hidden');
+    });
+}
+
+async function deleteProvider(id) {
+    if (!confirm('确认删除此 AI 提供商？')) return;
+    try {
+        await api('DELETE', `/api/ai/providers/${id}`);
+        resetProviderForm();
+        await loadProviders();
+    } catch (e) {
+        alert('删除失败: ' + e.message);
+    }
+}
+
+function resetProviderForm() {
+    $('#provider-edit-id').value = '';
+    $('#provider-name').value = '';
+    $('#provider-base-url').value = '';
+    $('#provider-api-key').value = '';
+    $('#provider-api-key').placeholder = 'sk-...';
+    $('#provider-model').value = '';
+    $('#provider-temperature').value = '0';
+    $('#provider-form-title').textContent = '添加 AI 提供商';
+    $('#btn-cancel-provider').classList.add('hidden');
+}
+
+async function saveProvider() {
+    const editId = $('#provider-edit-id').value;
+    const data = {
+        name: $('#provider-name').value.trim(),
+        base_url: $('#provider-base-url').value.trim(),
+        model: $('#provider-model').value.trim(),
+        temperature: parseFloat($('#provider-temperature').value) || 0,
+    };
+    const apiKey = $('#provider-api-key').value.trim();
+    if (apiKey) data.api_key = apiKey;
+
+    if (!data.name || !data.base_url || !data.model) {
+        alert('请填写提供商名称、API Base URL 和模型名称');
+        return;
+    }
+
+    try {
+        if (editId) {
+            await api('PUT', `/api/ai/providers/${editId}`, data);
+        } else {
+            if (!apiKey) {
+                alert('新建提供商时 API Key 不能为空');
+                return;
+            }
+            data.api_key = apiKey;
+            await api('POST', '/api/ai/providers', data);
+        }
+        resetProviderForm();
+        await loadProviders();
     } catch (e) {
         alert('保存失败: ' + e.message);
     }
+}
+
+// ==================== 侧边栏拖拽调整宽度 ====================
+function initSidebarResize() {
+    const sidebar = $('#sidebar');
+    const resizer = $('#sidebar-resizer');
+    if (!sidebar || !resizer) return;
+
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = sidebar.offsetWidth;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        const diff = e.clientX - startX;
+        const newWidth = Math.min(Math.max(startWidth + diff, 160), 480);
+        sidebar.style.width = newWidth + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isResizing) return;
+        isResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    });
+}
+
+// ==================== 表名标签插入 AI 输入框 ====================
+
+/** 创建一个表名标签 pill 元素 */
+function createTableTagElement(tableName) {
+    const tag = document.createElement('span');
+    tag.className = 'table-tag';
+    tag.contentEditable = 'false';
+    tag.draggable = 'true';
+    tag.dataset.table = tableName;
+
+    const label = document.createElement('span');
+    label.textContent = tableName;
+    tag.appendChild(label);
+
+    const removeBtn = document.createElement('span');
+    removeBtn.className = 'tag-remove';
+    removeBtn.textContent = '×';
+    removeBtn.onmousedown = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+    removeBtn.onclick = (e) => {
+        e.stopPropagation();
+        tag.remove();
+    };
+    tag.appendChild(removeBtn);
+
+    // 拖拽开始
+    tag.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', 'table-tag');
+        e.dataTransfer.setData('application/table-tag', tableName);
+        tag.classList.add('dragging');
+    });
+    tag.addEventListener('dragend', () => {
+        tag.classList.remove('dragging');
+    });
+
+    return tag;
+}
+
+/** 左键单击表名：将表名以标签形式插入 AI 对话输入框 */
+function insertTableTagIntoAi(tableName) {
+    // 确保存在 AI tab
+    let aiTab = state.tabs.find(t => t.type === 'ai');
+    const needSwitch = !aiTab;
+    if (!aiTab) {
+        createAiTab();
+        aiTab = state.tabs.find(t => t.type === 'ai');
+    }
+    if (!aiTab) return;
+
+    // 如果 AI tab 已经是当前活动 tab，不重建面板（保留已输入内容）
+    const alreadyActive = (state.activeTabId === aiTab.id);
+    if (!alreadyActive) {
+        activateTab(aiTab.id);
+    }
+
+    const delay = alreadyActive ? 0 : 60;
+    setTimeout(() => {
+        const input = document.getElementById(`chat-input-${aiTab.id}`);
+        if (!input) return;
+        input.focus();
+
+        const tag = createTableTagElement(tableName);
+
+        // 尝试在光标位置插入，否则追加到末尾
+        const sel = window.getSelection();
+        let inserted = false;
+        if (sel.rangeCount) {
+            const range = sel.getRangeAt(0);
+            if (input.contains(range.commonAncestorContainer)) {
+                range.insertNode(tag);
+                // 光标移到标签后
+                const afterRange = document.createRange();
+                afterRange.setStartAfter(tag);
+                afterRange.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(afterRange);
+                inserted = true;
+            }
+        }
+        if (!inserted) {
+            input.appendChild(tag);
+        }
+
+        // 标签后加一个空格，方便继续输入
+        const space = document.createTextNode('\u00A0');
+        tag.after(space);
+    }, 60);
 }
