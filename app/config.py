@@ -1,11 +1,40 @@
 """配置管理模块"""
 
 import json
+import sys
 from pathlib import Path
 
 
-# 项目根目录
-BASE_DIR = Path(__file__).resolve().parent.parent
+def get_base_dir():
+    """获取项目根目录（用于数据存储）"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的环境，使用 exe 所在目录
+        return Path(sys.executable).parent
+    else:
+        # 开发环境，使用项目根目录
+        return Path(__file__).resolve().parent.parent
+
+
+def get_resource_dir():
+    """获取资源文件目录（模板和静态文件）"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后，资源文件在 _internal 目录（PyInstaller 5.0+）
+        # 或者在 sys._MEIPASS（老版本）
+        base = Path(sys.executable).parent / "_internal"
+        if base.exists():
+            return base
+        # 兼容老版本 PyInstaller
+        if hasattr(sys, '_MEIPASS'):
+            return Path(sys._MEIPASS)
+        # 降级到 exe 同级目录
+        return Path(sys.executable).parent
+    else:
+        # 开发环境，使用项目根目录
+        return Path(__file__).resolve().parent.parent
+
+
+# 项目根目录（用于数据存储）
+BASE_DIR = get_base_dir()
 
 # 本地存储目录（用户数据）
 DATA_DIR = BASE_DIR / "data"
@@ -15,8 +44,9 @@ DATA_DIR.mkdir(exist_ok=True)
 LOCAL_DB_PATH = DATA_DIR / "dbagent.db"
 
 # 模板和静态文件目录
-TEMPLATES_DIR = BASE_DIR / "app" / "templates"
-STATIC_DIR = BASE_DIR / "static"
+RESOURCE_DIR = get_resource_dir()
+TEMPLATES_DIR = RESOURCE_DIR / "app" / "templates"
+STATIC_DIR = RESOURCE_DIR / "static"
 
 # 服务器配置
 HOST = "127.0.0.1"
