@@ -221,6 +221,29 @@
 .data-table th:hover {
     background: #252545;
 }
+/* 列筛选标签 */
+.col-filter-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: rgba(233, 69, 96, 0.15);
+    color: #e94560;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: 'Consolas', monospace;
+    white-space: nowrap;
+}
+.col-filter-tag-x {
+    cursor: pointer;
+    margin-left: 2px;
+    font-size: 13px;
+    line-height: 1;
+    opacity: 0.6;
+}
+.col-filter-tag-x:hover {
+    opacity: 1;
+}
 /* 表头列注释 */
 .th-comment {
     display: block;

@@ -506,7 +506,7 @@ async function showTableData(tableName) {
             ? '' : '<span class="text-yellow-500 ml-2">(无主键，不可编辑)</span>';
         if (infoEl) {
             infoEl.innerHTML = `
-                <span>表: ${escapeHtml(tableName)} | ${data.rows.length} 行${pkInfo}</span>
+                <span style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">表: ${escapeHtml(tableName)} | ${data.rows.length} 行${pkInfo}</span>
                 <span class="flex items-center gap-2">
                     <label class="flex items-center gap-1 cursor-pointer">
                         <input type="checkbox" class="accent-red-500" id="data-select-all-${activeTab.id}"> <span class="text-xs">全选</span>
@@ -549,10 +549,10 @@ async function showTableDdl(tableName) {
 function insertSelectSql(tableName) {
     const tab = getActiveSqlTab();
     if (!tab) {
-        createSqlTab(`SELECT * FROM ${tableName} LIMIT 100;`);
+        createSqlTab(`SELECT * FROM ${tableName};`);
     } else {
         if (tab.editor) {
-            tab.editor.setValue(`SELECT * FROM ${tableName} LIMIT 100;`);
+            tab.editor.setValue(`SELECT * FROM ${tableName};`);
         }
     }
 }
@@ -934,6 +934,15 @@ function createAiPanel(tab) {
 let pendingConfirmTabId = null;
 let pendingConfirmSql = null;
 
+// 列筛选上下文（全局，供弹窗按钮回调）
+let _activeColFilter = {
+    colFilters: {},     // 当前列筛选状态
+    renderRows: null,   // 重新渲染行
+    renderFilterTags: null,
+    filterColIdx: -1,
+    columns: [],
+};
+
 async function executeSql(tabId) {
     const tab = state.tabs.find(t => t.id === tabId);
     if (!tab || !tab.editor || !state.currentConnId) {
@@ -968,7 +977,13 @@ async function executeSql(tabId) {
 
 function renderSqlResult(tabId, result) {
     if (result.type === 'query') {
-        renderResultTable(tabId, { columns: result.columns, rows: result.rows });
+        renderResultTable(tabId, {
+            columns: result.columns,
+            rows: result.rows,
+            column_meta: result.column_meta || [],
+            primary_keys: result.primary_keys || [],
+            tableName: result.tableName || null,
+        });
         updateResultInfo(tabId, `${result.rowcount} 行`);
     } else {
         const wrapper = document.getElementById(`sql-result-${tabId}`);
@@ -1014,10 +1029,11 @@ function renderResultTable(tabId, data) {
     }
 
     let sortCol = -1, sortAsc = true;
+    const colFilters = {}; // 列索引 -> { op, value } 活动筛选
     const table = document.createElement('table');
     table.className = 'data-table';
 
-    // 表头 — 带列注释
+    // 表头 — 带列注释 + 筛选图标
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
     // 勾选列表头（对齐数据行的勾选框 td）
@@ -1032,6 +1048,7 @@ function renderResultTable(tabId, data) {
         } else {
             th.textContent = col;
         }
+        // 左键排序
         th.onclick = () => {
             if (sortCol === i) sortAsc = !sortAsc;
             else { sortCol = i; sortAsc = true; }
@@ -1041,6 +1058,12 @@ function renderResultTable(tabId, data) {
             });
             renderRows();
         };
+        // 右键筛选菜单
+        th.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showColFilterMenu(e, i, col);
+        };
         headerRow.appendChild(th);
     });
     thead.appendChild(headerRow);
@@ -1049,9 +1072,58 @@ function renderResultTable(tabId, data) {
     const tbody = document.createElement('tbody');
     table.appendChild(tbody);
 
+    // 筛选匹配函数
+    function matchFilter(cellValue, filter) {
+        const v = cellValue;
+        const sv = String(v ?? '');
+        const fv = filter.value;
+        switch (filter.op) {
+            case 'LIKE': {
+                const pattern = fv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const likePattern = pattern.replace(/%/g, '.*').replace(/_/g, '.');
+                const regex = new RegExp(
+                    (likePattern.includes('.*') || likePattern.includes('.')) ? `^${likePattern}$` : `.*${likePattern}.*`, 'i'
+                );
+                return regex.test(sv);
+            }
+            case '=': return sv === fv;
+            case '!=': return sv !== fv;
+            case '>': return sv > fv;
+            case '<': return sv < fv;
+            case '>=': return sv >= fv;
+            case '<=': return sv <= fv;
+            case 'IS NULL': return v === null || v === undefined;
+            case 'IS NOT NULL': return v !== null && v !== undefined;
+            case 'custom': {
+                // filter.value 存的是自定义表达式如 "> 100 AND < 200"
+                try {
+                    const numV = Number(v);
+                    if (!isNaN(numV)) {
+                        return new Function('v', 'n', `return ${fv}`)(sv, numV);
+                    }
+                    return new Function('v', `return ${fv}`)(sv);
+                } catch { return false; }
+            }
+            default: return true;
+        }
+    }
+
     function renderRows() {
         tbody.innerHTML = '';
+        let visibleCount = 0;
         rows.forEach((row, rowIdx) => {
+            // 检查列筛选
+            if (Object.keys(colFilters).length > 0) {
+                let matched = true;
+                for (const [colIdx, filter] of Object.entries(colFilters)) {
+                    if (!matchFilter(row[parseInt(colIdx)], filter)) {
+                        matched = false;
+                        break;
+                    }
+                }
+                if (!matched) return;
+            }
+            visibleCount++;
             const tr = document.createElement('tr');
             // 勾选框
             const tdCb = document.createElement('td');
@@ -1093,6 +1165,156 @@ function renderResultTable(tabId, data) {
         });
     }
     renderRows();
+
+    // 渲染筛选标签到结果信息栏
+    function renderFilterTags() {
+        const infoEl = document.getElementById(`sql-result-info-${tabId}`);
+        if (!infoEl) return;
+        // 找到或创建筛选标签容器
+        let tagsContainer = infoEl.querySelector('.col-filter-tags');
+        if (!tagsContainer) {
+            tagsContainer = document.createElement('span');
+            tagsContainer.className = 'col-filter-tags';
+            tagsContainer.style.cssText = 'display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:8px;';
+            const firstSpan = infoEl.querySelector('span');
+            if (firstSpan) firstSpan.appendChild(tagsContainer);
+        }
+        tagsContainer.innerHTML = '';
+        for (const [colIdx, filter] of Object.entries(colFilters)) {
+            const colName = columns[parseInt(colIdx)];
+            const label = filter.op === 'custom'
+                ? `${colName} ${filter.value}`
+                : filter.op === 'IS NULL' || filter.op === 'IS NOT NULL'
+                    ? `${colName} ${filter.op}`
+                    : `${colName} ${filter.op} '${filter.value}'`;
+            const tag = document.createElement('span');
+            tag.className = 'col-filter-tag';
+            tag.innerHTML = `${escapeHtml(label)} <span class="col-filter-tag-x" data-col-idx="${colIdx}">&times;</span>`;
+            tag.querySelector('.col-filter-tag-x').onclick = (e) => {
+                e.stopPropagation();
+                delete colFilters[colIdx];
+                renderRows();
+                renderFilterTags();
+            };
+            tagsContainer.appendChild(tag);
+        }
+    }
+
+    // 更新全局筛选上下文，供外部回调使用
+    _activeColFilter.colFilters = colFilters;
+    _activeColFilter.renderRows = renderRows;
+    _activeColFilter.renderFilterTags = renderFilterTags;
+    _activeColFilter.columns = columns;
+
+    // 右键列头筛选浮层菜单
+    function showColFilterMenu(e, colIdx, colName) {
+        _activeColFilter.filterColIdx = colIdx;
+        document.querySelectorAll('.col-filter-menu').forEach(m => m.remove());
+
+        const menu = document.createElement('div');
+        menu.className = 'context-menu col-filter-menu';
+        menu.style.minWidth = '180px';
+        menu.innerHTML = `
+            <div class="context-menu-item context-filter-header" style="color:#6b7280;font-size:11px;cursor:default;border-bottom:1px solid #2a2a4a;margin-bottom:2px;padding-bottom:6px">
+                筛选: ${escapeHtml(colName)}
+            </div>
+            <div class="col-filter-row" style="padding:5px 10px">
+                <select class="col-filter-op-select" style="width:100%;background:#12122a;border:1px solid #2a2a4a;color:#c0c0d0;font-size:11px;padding:2px 4px;border-radius:3px;outline:none">
+                    <option value="LIKE">LIKE</option>
+                    <option value="=">= 等于</option>
+                    <option value="!=">!= 不等于</option>
+                    <option value=">">> 大于</option>
+                    <option value="<">< 小于</option>
+                    <option value=">=">>= 大于等于</option>
+                    <option value="<="><= 小于等于</option>
+                    <option value="IS NULL">IS NULL</option>
+                    <option value="IS NOT NULL">IS NOT NULL</option>
+                    <option value="custom">自定义表达式</option>
+                </select>
+            </div>
+            <div class="col-filter-row col-filter-value-row" style="padding:2px 10px">
+                <input class="col-filter-value-input" type="text" placeholder="%关键词%" style="width:100%;background:#12122a;border:1px solid #2a2a4a;color:#c0c0d0;font-size:11px;padding:3px 6px;border-radius:3px;outline:none;font-family:Consolas,monospace">
+            </div>
+            <div style="display:flex;gap:4px;padding:4px 10px;justify-content:flex-end">
+                <button class="col-filter-btn-clear" style="background:transparent;border:1px solid #2a2a4a;color:#e6a23c;font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer">清除</button>
+                <button class="col-filter-btn-ok" style="background:#e94560;border:none;color:white;font-size:11px;padding:2px 10px;border-radius:3px;cursor:pointer">筛选</button>
+            </div>
+        `;
+
+        const opSelect = menu.querySelector('.col-filter-op-select');
+        const valueRow = menu.querySelector('.col-filter-value-row');
+        const valueInput = menu.querySelector('.col-filter-value-input');
+
+        // 恢复已有筛选
+        const existing = colFilters[colIdx];
+        if (existing) {
+            opSelect.value = existing.op;
+            if (existing.op !== 'IS NULL' && existing.op !== 'IS NOT NULL') {
+                valueInput.value = existing.value;
+            }
+        }
+
+        function toggleValue() {
+            const op = opSelect.value;
+            valueRow.style.display = (op === 'IS NULL' || op === 'IS NOT NULL') ? 'none' : '';
+            if (op === 'custom') valueInput.placeholder = 'JS 表达式，如 n>100';
+            else if (op === 'LIKE') valueInput.placeholder = '%关键词%';
+            else valueInput.placeholder = '输入值';
+        }
+        opSelect.onchange = toggleValue;
+        toggleValue();
+
+        // 定位菜单（防止超出屏幕）
+        menu.style.left = e.clientX + 'px';
+        menu.style.top = e.clientY + 'px';
+        document.body.appendChild(menu);
+        // 修正溢出
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+            if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+        });
+
+        // 筛选按钮
+        menu.querySelector('.col-filter-btn-ok').onclick = () => {
+            const op = opSelect.value;
+            const value = valueInput.value;
+            if (op !== 'IS NULL' && op !== 'IS NOT NULL' && op !== 'custom' && !value) {
+                menu.remove();
+                return;
+            }
+            colFilters[colIdx] = { op, value };
+            renderRows();
+            renderFilterTags();
+            menu.remove();
+        };
+
+        // 清除按钮
+        menu.querySelector('.col-filter-btn-clear').onclick = () => {
+            delete colFilters[colIdx];
+            renderRows();
+            renderFilterTags();
+            menu.remove();
+        };
+
+        // 输入框回车确认
+        valueInput.onkeydown = (ev) => {
+            if (ev.key === 'Enter') menu.querySelector('.col-filter-btn-ok').click();
+        };
+
+        // 点击其他地方关闭
+        setTimeout(() => {
+            document.addEventListener('mousedown', function close(ev) {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('mousedown', close);
+                }
+            });
+        }, 10);
+
+        // 聚焦输入框
+        setTimeout(() => valueInput.focus(), 50);
+    }
 
     wrapper.innerHTML = '';
     wrapper.appendChild(table);

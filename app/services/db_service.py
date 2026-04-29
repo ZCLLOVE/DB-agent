@@ -3,6 +3,7 @@
 封装所有对用户数据库的操作：表浏览、数据预览、SQL执行、DDL查看等。
 """
 
+import re
 from sqlalchemy import text, inspect
 from typing import Optional
 
@@ -137,6 +138,25 @@ class DbService:
             "primary_keys": pk_columns,
         }
 
+    @staticmethod
+    def _extract_table_name(sql: str) -> Optional[str]:
+        """从简单 SELECT SQL 中提取表名（支持单表查询）"""
+        # 匹配 SELECT ... FROM table_name 模式
+        m = re.search(
+            r'\bFROM\s+`?(\w+)`?(?:\s+(?:AS\s+)?\w+)?\s*(?:WHERE|GROUP|ORDER|LIMIT|HAVING|;|$)',
+            sql.strip(), re.IGNORECASE | re.DOTALL
+        )
+        if m:
+            # 排除子查询关键词
+            name = m.group(1).strip('`"')
+            if name.upper() not in ('SELECT', 'DUAL'):
+                return name
+        # 尝试更宽松的匹配：FROM table 后面直接结束
+        m = re.search(r'\bFROM\s+`?(\w+)`?\s*$', sql.strip(), re.IGNORECASE)
+        if m:
+            return m.group(1).strip('`"')
+        return None
+
     def execute_sql(self, sql: str, params: Optional[dict] = None) -> dict:
         """执行 SQL 语句"""
         with self.engine.connect() as conn:
@@ -146,11 +166,32 @@ class DbService:
             if result.returns_rows:
                 columns = list(result.keys())
                 rows = [list(row) for row in result.fetchall()]
+
+                # 尝试获取列元数据和主键（用于显示注释和编辑）
+                column_meta = []
+                primary_keys = []
+                table_name = self._extract_table_name(sql)
+                if table_name:
+                    try:
+                        columns_info = self.describe_table(table_name)
+                        column_meta = [{"name": c["name"], "comment": c["comment"]}
+                                       for c in columns_info]
+                        primary_keys = [c["name"] for c in columns_info if c["primary_key"]]
+                    except Exception:
+                        pass
+
+                # 如果没拿到元数据，用空注释兜底
+                if not column_meta:
+                    column_meta = [{"name": c, "comment": ""} for c in columns]
+
                 return {
                     "type": "query",
                     "columns": columns,
                     "rows": rows,
                     "rowcount": len(rows),
+                    "column_meta": column_meta,
+                    "primary_keys": primary_keys,
+                    "tableName": table_name,
                 }
             else:
                 conn.commit()
