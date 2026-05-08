@@ -17,11 +17,13 @@
 
 ## 它是什么？
 
-DB-Agent 是一个**本地运行的数据库管理工具**，集成了 AI Agent 能力。
+DB-Agent 是一个**本地运行的数据库管理工具 + API 调试工具**，集成了 AI Agent 能力。
 
-你可以把它理解为 **「DBeaver + AI」** —— 既能像传统工具一样浏览表结构、执行 SQL、导出数据，又可以通过自然语言让 AI 自动探索数据库、生成并执行查询。
+你可以把它理解为 **「DBeaver + Postman + AI」** —— 既能像传统工具一样浏览表结构、执行 SQL、导出数据，又可以通过自然语言让 AI 自动探索数据库、生成并执行查询。同时内置专业的 API 测试功能，支持接口调试、集合管理、环境变量等。
 
-**核心体验：** 用中文描述你想要的数据，AI 自主调用工具探索数据库结构，生成准确的 SQL 并执行，结果直接展示。写操作需要你确认后才执行，安全可控。
+**核心体验：**
+- **数据库管理：** 用中文描述你想要的数据，AI 自主调用工具探索数据库结构，生成准确的 SQL 并执行，结果直接展示。写操作需要你确认后才执行，安全可控。
+- **API 调试：** 类 Apifox/Postman 的专业布局，多标签页管理请求，支持集合收藏、环境变量、历史记录，AI 助手可以帮你调用接口、Mock 数据、分析响应。
 
 ---
 
@@ -65,15 +67,28 @@ DB-Agent 的设计理念：
 | 多模型切换 | 配置多个 AI Provider，一键切换（DeepSeek / OpenAI / 本地模型等） |
 | 表名拖拽 | 从侧边栏拖拽表名到对话框，让 AI 聚焦分析特定表 |
 
+### 🔌 API 调试工具
+
+独立页面，类 Apifox/Postman 专业布局，三栏设计（集合侧边栏 + 请求/响应 + AI 助手）。
+
+| 功能 | 说明 |
+|------|------|
+| 多标签页 | 同时管理多个请求，每个标签页独立保存请求/响应状态 |
+| HTTP 请求 | 支持 GET/POST/PUT/DELETE/PATCH 等，Params/Headers/Body/Auth 编辑器 |
+| JSON 格式化 | Body 编辑器内置 JSON 格式化/压缩，粘贴自动格式化 |
+| 集合管理 | 创建收藏集合，保存常用接口，树形展示 |
+| 历史记录 | 自动记录所有请求，点击即可在新标签页恢复 |
+| 环境变量 | 多套环境配置，URL/Headers/Body 支持 `{{variable}}` 占位符 |
+| AI 助手 | 右侧 AI 面板，让 AI 帮你调用接口、Mock 数据、分析响应、管理集合 |
+| 可拖拽布局 | 侧边栏/请求-响应/AI 面板均支持拖拽调整大小 |
+
 ### AI Agent 工具链
 
-AI 会自主调用以下工具完成复杂查询：
+AI 会自主调用以下工具完成复杂任务：
 
-```
-用户提问 → AI 思考 → 列出数据库 → 查看表结构 → 抽样数据 → 生成 SQL → 执行返回结果
-```
+**数据库工具（5个）：** `list_databases` → `list_tables` → `describe_table` → `get_table_sample` → `execute_sql`
 
-5 个内置工具：`list_databases` → `list_tables` → `describe_table` → `get_table_sample` → `execute_sql`
+**API 工具（11个）：** `http_request` / `save_api_request` / `list_api_collections` / `get_api_request` / `update_api_request` / `delete_api_request` / `delete_api_collection` / `list_api_environments` / `create_api_environment` / `update_api_environment` / `delete_api_environment`
 
 ---
 
@@ -140,8 +155,12 @@ DB-agent/
 ├── build.spec              # PyInstaller 打包配置
 ├── requirements.txt
 ├── static/                 # 前端静态资源
-│   ├── css/style.css
-│   └── js/app.js
+│   ├── css/
+│   │   ├── style.css       # 数据库页面样式
+│   │   └── api-style.css   # API 调试页面样式
+│   └── js/
+│       ├── app.js          # 数据库页面逻辑
+│       └── api-app.js      # API 调试页面逻辑
 ├── app/
 │   ├── main.py             # FastAPI 应用入口
 │   ├── config.py           # 配置管理
@@ -151,13 +170,18 @@ DB-agent/
 │   │   ├── connection.py   # 数据库连接管理
 │   │   ├── table.py        # 表浏览与数据预览
 │   │   ├── sql.py          # SQL 执行与历史
-│   │   └── ai.py           # AI 对话与 Provider 管理
+│   │   ├── ai.py           # AI 对话与 Provider 管理
+│   │   └── api_client.py   # HTTP 请求代理与 API 集合管理
 │   ├── services/           # 业务逻辑
 │   │   ├── db_service.py   # 数据库操作服务
-│   │   └── ai_service.py   # AI Agent 服务
+│   │   ├── ai_service.py   # AI Agent 服务
+│   │   └── http_service.py # HTTP 请求代理服务
 │   ├── agents/
-│   │   └── tools.py        # AI Agent 工具定义
+│   │   └── tools.py        # AI Agent 工具定义（数据库 + API）
 │   └── templates/          # Jinja2 HTML 模板
+│       ├── base.html       # 基础模板
+│       ├── index.html      # 数据库管理页面
+│       └── api.html        # API 调试页面
 └── data/                   # 本地数据（自动创建）
     └── dbagent.db          # SQLite 存储连接/历史/配置
 ```
