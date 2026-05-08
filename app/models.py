@@ -146,7 +146,8 @@ class ApiEnvironment(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), nullable=False, comment="环境名称")
-    variables = Column(Text, default="{}", comment="变量键值对 JSON")
+    base_url = Column(Text, default="", comment="环境 Base URL")
+    variables = Column(Text, default="{}", comment="变量键值对 JSON（不含 base_url）")
     is_active = Column(Boolean, default=False, comment="是否当前激活")
     created_at = Column(DateTime, default=datetime.now)
 
@@ -155,6 +156,7 @@ class ApiEnvironment(Base):
         return {
             "id": self.id,
             "name": self.name,
+            "base_url": self.base_url or "",
             "variables": json.loads(self.variables or "{}"),
             "is_active": self.is_active,
         }
@@ -220,6 +222,7 @@ def init_local_db():
     Base.metadata.create_all(_local_engine)
     # 增量迁移：为旧表添加新列
     _migrate_history_table()
+    _migrate_env_base_url()
 
 
 def _migrate_history_table():
@@ -235,6 +238,36 @@ def _migrate_history_table():
                 session.commit()
             except Exception:
                 session.rollback()
+    finally:
+        session.close()
+
+
+def _migrate_env_base_url():
+    """为 api_environments 表添加 base_url 列并迁移旧数据"""
+    import json as _json
+    session = LocalSession()
+    try:
+        import sqlalchemy
+        try:
+            session.execute(sqlalchemy.text(
+                "ALTER TABLE api_environments ADD COLUMN base_url TEXT DEFAULT ''"
+            ))
+            session.commit()
+        except Exception:
+            session.rollback()
+
+        # 将旧 variables 中的 base_url 迁移到新列
+        rows = session.query(ApiEnvironment).all()
+        for row in rows:
+            if not row.base_url:
+                try:
+                    variables = _json.loads(row.variables or "{}")
+                    if "base_url" in variables:
+                        row.base_url = variables.pop("base_url")
+                        row.variables = _json.dumps(variables, ensure_ascii=False)
+                except Exception:
+                    pass
+        session.commit()
     finally:
         session.close()
 

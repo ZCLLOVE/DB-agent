@@ -90,7 +90,7 @@
                         <option value="HEAD">HEAD</option>
                         <option value="OPTIONS">OPTIONS</option>
                     </select>
-                    <input id="req-url" class="api-url-input" placeholder="输入请求 URL，如 https://api.example.com/users" value="">
+                    <input id="req-url" class="api-url-input" placeholder="输入请求路径，如 /users" value="">
                     <button id="btn-save-req" class="api-action-btn primary" title="保存请求">另存为</button>
                     <button id="req-send" class="api-send-btn">发送</button>
                 </div>
@@ -195,7 +195,11 @@
                 <input type="hidden" id="env-edit-id">
                 <div class="space-y-2 text-sm">
                     <div><label class="text-xs text-muted">环境名称</label><input id="env-name" placeholder="如: 开发环境、测试环境" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light"></div>
-                    <div><label class="text-xs text-muted">变量 (每行一个 key=value)</label><textarea id="env-vars" rows="6" placeholder="base_url=https://api.example.com&#10;token=your_token" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light font-mono text-xs"></textarea></div>
+                    <div><label class="text-xs text-muted">Base URL</label><input id="env-base-url" placeholder="https://api.example.com" class="w-full bg-bg border border-border rounded px-2 py-1 mt-1 focus:outline-none focus:border-accent-light font-mono text-xs"></div>
+                    <div>
+                        <label class="text-xs text-muted">环境变量</label>
+                        <div id="env-vars-container" class="mt-1"></div>
+                    </div>
                 </div>
                 <div class="flex gap-2 mt-3">
                     <button id="btn-save-env" class="bg-accent hover:bg-accent-light text-white text-sm px-4 py-1.5 rounded">保存</button>

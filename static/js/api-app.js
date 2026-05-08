@@ -130,9 +130,72 @@ function renderTabs() {
             <button class="tab-close" title="关闭">&times;</button>
         `;
         div.onclick = () => switchTab(tab.id);
+        div.oncontextmenu = (e) => showTabContextMenu(e, tab.id);
         div.querySelector('.tab-close').onclick = (e) => closeTab(tab.id, e);
         list.appendChild(div);
     });
+}
+
+// ==================== 页签右键菜单 ====================
+function showTabContextMenu(e, tabId) {
+    e.preventDefault();
+    e.stopPropagation();
+    document.querySelectorAll('.context-menu').forEach(m => m.remove());
+
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.innerHTML = `
+        <div class="context-menu-item" data-action="close-others">关闭其他标签</div>
+        <div class="context-menu-item" data-action="close-left">关闭左侧标签</div>
+        <div class="context-menu-item" data-action="close-right">关闭右侧标签</div>
+    `;
+    menu.onclick = (ev) => {
+        const item = ev.target.closest('.context-menu-item');
+        if (!item) return;
+        const action = item.dataset.action;
+        menu.remove();
+        switch (action) {
+            case 'close-others': closeOtherTabs(tabId); break;
+            case 'close-left': closeLeftTabs(tabId); break;
+            case 'close-right': closeRightTabs(tabId); break;
+        }
+    };
+    document.body.appendChild(menu);
+    setTimeout(() => {
+        const dismiss = () => { menu.remove(); document.removeEventListener('click', dismiss); };
+        document.addEventListener('click', dismiss);
+    }, 10);
+}
+
+function closeOtherTabs(keepId) {
+    state.tabs = state.tabs.filter(t => t.id === keepId);
+    state.activeTabId = keepId;
+    renderTabs();
+    applyTabToUI();
+}
+
+function closeLeftTabs(tabId) {
+    const idx = state.tabs.findIndex(t => t.id === tabId);
+    if (idx <= 0) return;
+    const closed = state.tabs.splice(0, idx);
+    if (!state.tabs.find(t => t.id === state.activeTabId)) {
+        state.activeTabId = tabId;
+    }
+    renderTabs();
+    applyTabToUI();
+}
+
+function closeRightTabs(tabId) {
+    const idx = state.tabs.findIndex(t => t.id === tabId);
+    if (idx === -1 || idx >= state.tabs.length - 1) return;
+    const closed = state.tabs.splice(idx + 1);
+    if (!state.tabs.find(t => t.id === state.activeTabId)) {
+        state.activeTabId = tabId;
+    }
+    renderTabs();
+    applyTabToUI();
 }
 
 // 从 DOM 读取当前状态存入 active tab
@@ -789,7 +852,7 @@ function openEnvModal() {
             const vars = Object.entries(env.variables || {}).map(([k, v]) => `${k}=${v}`).join(', ');
             const div = document.createElement('div');
             div.className = 'flex items-center justify-between bg-bg rounded px-3 py-2 border border-border';
-            div.innerHTML = `<div><div class="text-sm font-medium ${env.is_active ? 'text-primary' : ''}">${escapeHtml(env.name)} ${env.is_active ? '<span class="text-[10px] bg-primary/20 text-primary px-1.5 rounded">激活</span>' : ''}</div><div class="text-xs text-muted mt-0.5 truncate max-w-[300px]">${escapeHtml(vars || '无变量')}</div></div><div class="flex gap-1">${!env.is_active ? `<button onclick="activateEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-accent-light text-muted">使用</button>` : ''}<button onclick="editEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-muted text-muted">编辑</button><button onclick="deleteEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-red-500 hover:text-red-400 text-muted">删除</button></div>`;
+            div.innerHTML = `<div><div class="text-sm font-medium ${env.is_active ? 'text-primary' : ''}">${escapeHtml(env.name)} ${env.is_active ? '<span class="text-[10px] bg-primary/20 text-primary px-1.5 rounded">激活</span>' : ''}</div><div class="text-xs text-muted mt-0.5 truncate max-w-[300px]">${escapeHtml(env.base_url || '未配置 Base URL')}${vars ? ' | ' + escapeHtml(vars) : ''}</div></div><div class="flex gap-1">${!env.is_active ? `<button onclick="activateEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-accent-light text-muted">使用</button>` : ''}<button onclick="editEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-muted text-muted">编辑</button><button onclick="deleteEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-red-500 hover:text-red-400 text-muted">删除</button></div>`;
             list.appendChild(div);
         });
         resetEnvForm();
@@ -797,16 +860,55 @@ function openEnvModal() {
     });
 }
 
+function renderEnvKvEditor(container, data) {
+    container.innerHTML = '';
+    const entries = Object.keys(data || {}).length > 0
+        ? Object.entries(data).map(([k, v]) => ({ key: k, value: v }))
+        : [];
+    entries.forEach(entry => {
+        const row = document.createElement('div');
+        row.className = 'api-kv-row';
+        row.innerHTML = `
+            <input class="kv-key" value="${escapeHtml(entry.key)}" placeholder="Key">
+            <input class="kv-value" value="${escapeHtml(String(entry.value))}" placeholder="Value">
+            <button class="api-kv-remove">&times;</button>
+        `;
+        row.querySelector('.api-kv-remove').onclick = () => row.remove();
+        container.appendChild(row);
+    });
+    const addBtn = document.createElement('button');
+    addBtn.className = 'api-kv-add';
+    addBtn.textContent = '+ Add';
+    addBtn.onclick = () => {
+        const row = document.createElement('div');
+        row.className = 'api-kv-row';
+        row.innerHTML = `<input class="kv-key" placeholder="Key"><input class="kv-value" placeholder="Value"><button class="api-kv-remove">&times;</button>`;
+        row.querySelector('.api-kv-remove').onclick = () => row.remove();
+        container.insertBefore(row, addBtn);
+    };
+    container.appendChild(addBtn);
+}
+
+function collectEnvKvVars() {
+    const variables = {};
+    const container = $('#env-vars-container');
+    container.querySelectorAll('.api-kv-row').forEach(row => {
+        const key = row.querySelector('.kv-key')?.value?.trim();
+        const val = row.querySelector('.kv-value')?.value ?? '';
+        if (key) variables[key] = val;
+    });
+    return variables;
+}
+
 async function saveEnv() {
     const editId = $('#env-edit-id').value;
     const name = $('#env-name').value.trim();
-    const varsText = $('#env-vars').value.trim();
+    const base_url = $('#env-base-url').value.trim();
+    const variables = collectEnvKvVars();
     if (!name) { alert('请填写环境名称'); return; }
-    const variables = {};
-    varsText.split('\n').forEach(line => { const i = line.indexOf('='); if (i > 0) variables[line.substring(0, i).trim()] = line.substring(i + 1).trim(); });
     try {
-        if (editId) await api('PUT', `/api/http/environments/${editId}`, { name, variables });
-        else await api('POST', '/api/http/environments', { name, variables });
+        if (editId) await api('PUT', `/api/http/environments/${editId}`, { name, base_url, variables });
+        else await api('POST', '/api/http/environments', { name, base_url, variables });
         resetEnvForm(); await loadEnvironments(); openEnvModal();
     } catch (e) { alert('保存失败: ' + e.message); }
 }
@@ -815,14 +917,20 @@ async function editEnv(id) {
     const envs = await api('GET', '/api/http/environments');
     const env = envs.find(e => e.id === id);
     if (!env) return;
-    $('#env-edit-id').value = env.id; $('#env-name').value = env.name;
-    $('#env-vars').value = Object.entries(env.variables || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+    $('#env-edit-id').value = env.id;
+    $('#env-name').value = env.name;
+    $('#env-base-url').value = env.base_url || '';
+    renderEnvKvEditor($('#env-vars-container'), env.variables || {});
     $('#env-form-title').textContent = '编辑环境'; $('#btn-cancel-env').classList.remove('hidden');
 }
 
 async function activateEnv(id) { await api('POST', `/api/http/environments/${id}/activate`); await loadEnvironments(); openEnvModal(); }
 async function deleteEnv(id) { if (!confirm('删除此环境？')) return; await api('DELETE', `/api/http/environments/${id}`); await loadEnvironments(); openEnvModal(); }
-function resetEnvForm() { $('#env-edit-id').value = ''; $('#env-name').value = ''; $('#env-vars').value = ''; $('#env-form-title').textContent = '新建环境'; $('#btn-cancel-env').classList.add('hidden'); }
+function resetEnvForm() {
+    $('#env-edit-id').value = ''; $('#env-name').value = ''; $('#env-base-url').value = '';
+    renderEnvKvEditor($('#env-vars-container'), {});
+    $('#env-form-title').textContent = '新建环境'; $('#btn-cancel-env').classList.add('hidden');
+}
 
 // ==================== AI 提供商管理 ====================
 async function loadProviders() {

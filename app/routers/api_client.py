@@ -235,6 +235,7 @@ def create_environment(body: dict, session: Session = Depends(get_local_session)
     import json
     env = ApiEnvironment(
         name=body.get("name", "新环境"),
+        base_url=body.get("base_url", ""),
         variables=json.dumps(body.get("variables", {}), ensure_ascii=False),
     )
     session.add(env)
@@ -252,6 +253,8 @@ def update_environment(env_id: int, body: dict, session: Session = Depends(get_l
         return {"error": "环境不存在"}
     if "name" in body:
         env.name = body["name"]
+    if "base_url" in body:
+        env.base_url = body["base_url"]
     if "variables" in body:
         env.variables = json.dumps(body["variables"], ensure_ascii=False)
     session.commit()

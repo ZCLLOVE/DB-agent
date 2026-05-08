@@ -27,6 +27,20 @@ def _get_active_env_vars() -> dict:
         session.close()
 
 
+def _get_active_env_base_url() -> str:
+    """获取当前激活环境的 base_url"""
+    session = LocalSession()
+    try:
+        env = session.query(ApiEnvironment).filter(
+            ApiEnvironment.is_active == True
+        ).first()
+        if env:
+            return env.base_url or ""
+        return ""
+    finally:
+        session.close()
+
+
 def _replace_vars(text: str, variables: dict) -> str:
     """替换文本中的 {{var}} 占位符"""
     if not text or not variables:
@@ -57,6 +71,7 @@ async def send_request(
     timeout: int = 30,
 ) -> dict:
     """发送 HTTP 请求并返回响应"""
+    original_url = url  # 保存原始路径用于历史记录
     variables = _get_active_env_vars()
 
     # 替换变量
@@ -64,6 +79,11 @@ async def send_request(
     headers = _replace_vars_dict(headers or {}, variables)
     params = _replace_vars_dict(params or {}, variables)
     body_raw = _replace_vars(body_raw, variables)
+
+    # 自动拼接 base_url
+    base_url = _get_active_env_base_url()
+    if base_url and not url.startswith(('http://', 'https://')):
+        url = base_url.rstrip('/') + '/' + url.lstrip('/')
 
     # 构建 body
     content = None
@@ -158,7 +178,7 @@ async def send_request(
 
     # 保存到历史
     _save_history(
-        method=method, url=url,
+        method=method, url=original_url,
         req_headers=headers, req_params=params,
         req_body=body_raw, body_type=body_type,
         status_code=status_code, resp_body=body_preview,
@@ -198,6 +218,11 @@ def generate_curl(method: str, url: str, headers: dict, params: dict,
     url = _replace_vars(url, variables)
     headers = _replace_vars_dict(headers or {}, variables)
     params = _replace_vars_dict(params or {}, variables)
+
+    # 自动拼接 base_url
+    base_url = _get_active_env_base_url()
+    if base_url and not url.startswith(('http://', 'https://')):
+        url = base_url.rstrip('/') + '/' + url.lstrip('/')
 
     # 构建带参数的 URL
     if params:
