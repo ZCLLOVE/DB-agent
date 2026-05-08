@@ -9,25 +9,82 @@ import json
 from openai import AsyncOpenAI
 
 from app.models import AiProvider, LocalSession
-from app.agents.tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS
+from app.agents.tools import TOOL_DEFINITIONS, TOOL_FUNCTIONS, HTTP_TOOL_DEFINITIONS, HTTP_TOOL_FUNCTIONS
 
 
-SYSTEM_PROMPT = """你是一个专业的数据库助手。你可以帮助用户查询和操作数据库。
+SYSTEM_PROMPT_DB = """你是一个专业的数据库助手和 API 测试助手。你可以帮助用户查询数据库、操作数据，以及调用和测试 HTTP 接口。
 
-你有以下工具可以使用：
+你有以下数据库工具：
 - list_databases: 列出所有数据库
 - list_tables: 列出指定数据库的所有表
 - describe_table: 查看表结构（字段名、类型、注释）
 - get_table_sample: 获取表的样例数据
 - execute_sql: 执行 SQL 语句
 
-使用规则：
+你有以下 HTTP 工具：
+- http_request: 发送 HTTP 请求（支持 GET/POST/PUT/DELETE 等）
+- save_api_request: 将请求保存到集合中（新增）
+- list_api_collections: 列出所有接口集合及其中的请求（查询）
+- get_api_request: 查询已保存的接口请求详情（查询）
+- update_api_request: 更新已保存的请求（修改）
+- delete_api_request: 删除已保存的请求（删除）
+- delete_api_collection: 删除集合及其下所有请求（删除）
+- list_api_environments: 列出所有环境变量配置
+- create_api_environment: 创建环境变量
+- update_api_environment: 更新环境变量
+- delete_api_environment: 删除环境变量
+
+数据库使用规则：
 1. 先了解用户的数据库结构再写 SQL（用 list_tables 和 describe_table）
 2. 写 SQL 前最好先看看样例数据（用 get_table_sample）
 3. SELECT 语句可以直接执行
 4. INSERT/UPDATE/DELETE/DDL 等写操作，你只需要生成 SQL 并告诉用户，等待用户确认
 5. 回复使用中文，简洁明了
 6. 如果生成的 SQL 较复杂，简单解释一下
+
+API 测试规则：
+1. 当用户说"调用xxx接口"时，使用 http_request 工具发送请求
+2. 如果缺少 URL、方法等必要参数，主动询问用户
+3. 当用户说"测试登录接口"等场景时，自动生成合理的 Mock 数据
+4. 收到响应后，分析状态码、数据结构，指出潜在问题
+5. 用户可以让保存常用接口，使用 save_api_request 工具
+6. 用户要求删除/修改接口时，使用 delete_api_request / update_api_request
+7. 支持环境变量占位符 {{variable_name}}，用户可以让你管理环境变量
+"""
+
+SYSTEM_PROMPT_API = """你是一个专业的 API 测试助手。你可以帮助用户调用 HTTP 接口、分析响应、Mock 数据，以及管理接口集合和环境变量。
+
+你有以下工具：
+
+接口请求：
+- http_request: 发送 HTTP 请求（支持 GET/POST/PUT/DELETE 等）
+
+接口集合管理（增删改查）：
+- save_api_request: 将请求保存到集合中（新增）
+- list_api_collections: 列出所有接口集合及其中的请求（查询）
+- get_api_request: 根据名称或集合查询已保存的接口请求详情（查询）
+- update_api_request: 更新已保存的接口请求（修改）
+- delete_api_request: 删除已保存的接口请求（删除）
+- delete_api_collection: 删除集合及其下所有请求（删除）
+
+环境变量管理（增删改查）：
+- list_api_environments: 列出所有环境变量配置（查询）
+- create_api_environment: 创建环境变量（新增）
+- update_api_environment: 更新环境变量（修改），支持 merge_variables 合并模式
+- delete_api_environment: 删除环境变量（删除）
+
+使用规则：
+1. 当用户说"调用xxx接口"时，使用 http_request 工具发送请求
+2. 如果缺少 URL、方法等必要参数，主动询问用户
+3. 当用户说"测试登录接口"等场景时，自动生成合理的 Mock 测试数据
+4. 收到响应后，分析状态码、数据结构、字段含义，指出潜在问题
+5. 用户可以让你保存常用接口，使用 save_api_request 工具
+6. 用户问"有哪些接口"或"查一下xxx接口"时，使用 list_api_collections 或 get_api_request 查询
+7. 用户要求删除/修改接口时，使用 delete_api_request / update_api_request
+8. 用户要求管理环境变量时，使用对应的环境变量 CRUD 工具
+9. 支持 URL/Headers/Body 中的环境变量占位符 {{variable_name}}
+10. 回复使用中文，简洁明了
+11. 可以帮用户生成各种请求的入参 Mock 数据（姓名、手机号、邮箱、地址等）
 """
 
 
@@ -76,13 +133,26 @@ class AiService:
         return config.get("model", "deepseek-chat")
 
     async def chat_stream(self, message: str, chat_history: list[dict],
-                          connection_id: int) -> AsyncGenerator[str, None]:
-        """流式 Agent 对话，手动实现工具调用循环"""
+                          connection_id: int, mode: str = "db") -> AsyncGenerator[str, None]:
+        """流式 Agent 对话，手动实现工具调用循环
+
+        mode: "db" 使用数据库+HTTP工具, "api" 仅使用HTTP工具
+        """
         client = self._get_client()
         model = self._get_model()
 
+        # 根据 mode 选择工具集和系统提示
+        if mode == "api":
+            system_prompt = SYSTEM_PROMPT_API
+            all_tools = HTTP_TOOL_DEFINITIONS
+            all_functions = HTTP_TOOL_FUNCTIONS
+        else:
+            system_prompt = SYSTEM_PROMPT_DB
+            all_tools = TOOL_DEFINITIONS + HTTP_TOOL_DEFINITIONS
+            all_functions = {**TOOL_FUNCTIONS, **HTTP_TOOL_FUNCTIONS}
+
         # 构建消息列表
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": system_prompt}]
 
         # 添加历史消息
         for msg in chat_history:
@@ -100,7 +170,7 @@ class AiService:
             stream = await client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=TOOL_DEFINITIONS,
+                tools=all_tools,
                 stream=True,
                 max_tokens=8192,
             )
@@ -184,7 +254,7 @@ class AiService:
 
                 # 执行工具
                 try:
-                    tool_fn = TOOL_FUNCTIONS.get(tool_name)
+                    tool_fn = all_functions.get(tool_name)
                     if tool_fn:
                         result = tool_fn(**tool_args)
                     else:

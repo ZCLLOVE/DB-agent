@@ -1705,13 +1705,64 @@ async function sendAiMessage(tabId) {
                         aiBubble.innerHTML = formatMarkdown(fullContent);
                         messagesEl.scrollTop = messagesEl.scrollHeight;
                     } else if (data.type === 'tool_start') {
-                        const toolDiv = document.createElement('div');
-                        toolDiv.className = 'tool-call';
-                        toolDiv.textContent = `🔧 调用工具: ${data.tool}`;
+                        let toolDiv;
+                        if (data.tool === 'http_request') {
+                            // 渲染为 HTTP 请求卡片
+                            try {
+                                const input = typeof data.input === 'string' ? JSON.parse(data.input) : data.input;
+                                const method = input.method || 'GET';
+                                const methodLower = method.toLowerCase();
+                                toolDiv = document.createElement('div');
+                                toolDiv.className = 'http-request-card';
+                                toolDiv.innerHTML = `
+                                    <div class="card-header">
+                                        <span class="card-method method-${methodLower}">${method}</span>
+                                        <span class="card-url">${escapeHtml(input.url || '')}</span>
+                                        <span class="text-xs text-muted">⏳ 发送中...</span>
+                                    </div>
+                                    ${input.body ? `<div class="card-body">${escapeHtml(typeof input.body === 'string' ? input.body : JSON.stringify(input.body)).substring(0, 200)}</div>` : ''}
+                                `;
+                            } catch (e) {
+                                toolDiv = document.createElement('div');
+                                toolDiv.className = 'tool-call';
+                                toolDiv.innerHTML = `🚀 <span style="color:#fcd34d">调用接口</span>: ${escapeHtml(String(data.input).substring(0, 200))}`;
+                            }
+                        } else if (data.tool === 'save_api_request') {
+                            toolDiv = document.createElement('div');
+                            toolDiv.className = 'tool-call';
+                            toolDiv.innerHTML = `💾 <span style="color:#6ee7b7">保存接口</span>`;
+                        } else {
+                            toolDiv = document.createElement('div');
+                            toolDiv.className = 'tool-call';
+                            toolDiv.textContent = `🔧 调用工具: ${data.tool}`;
+                        }
                         aiBubble.appendChild(toolDiv);
                         messagesEl.scrollTop = messagesEl.scrollHeight;
                     } else if (data.type === 'tool_end') {
-                        // 工具调用完成
+                        if (data.tool === 'http_request') {
+                            // 更新最后一个 HTTP 卡片状态
+                            const cards = aiBubble.querySelectorAll('.http-request-card');
+                            const lastCard = cards[cards.length - 1];
+                            if (lastCard) {
+                                const output = data.output || '';
+                                // 尝试解析状态码
+                                const statusMatch = output.match(/状态码:\s*(\d+)/);
+                                const elapsedMatch = output.match(/耗时:\s*(\d+)ms/);
+                                if (statusMatch) {
+                                    const status = parseInt(statusMatch[1]);
+                                    const statusColor = status < 300 ? '#6ee7b7' : status < 400 ? '#fcd34d' : '#fca5a5';
+                                    const statusText = status < 300 ? '✅' : status < 500 ? '⚠️' : '❌';
+                                    const headerDiv = lastCard.querySelector('.card-header');
+                                    if (headerDiv) {
+                                        const statusSpan = headerDiv.querySelector('.text-muted:last-child');
+                                        if (statusSpan) {
+                                            statusSpan.innerHTML = `${statusText} ${status} · ${elapsedMatch ? elapsedMatch[1] + 'ms' : ''}`;
+                                            statusSpan.style.color = statusColor;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } else if (data.type === 'done') {
                         break;
                     }

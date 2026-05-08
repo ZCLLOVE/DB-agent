@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/ai", tags=["AI对话"])
 
 class ChatRequest(BaseModel):
     message: str
-    connection_id: int
+    connection_id: int | None = None
     chat_history: list[dict] = []
 
 
@@ -43,18 +43,24 @@ class ProviderUpdate(BaseModel):
 async def chat(req: ChatRequest,
                session: Session = Depends(get_local_session)):
     """流式 AI 对话"""
-    conn = session.query(ConnectionConfig).get(req.connection_id)
-    if not conn:
-        raise HTTPException(404, "连接不存在")
-
-    context_message = (
-        f"[当前连接: {conn.name} ({conn.db_type}), "
-        f"数据库: {conn.database}, connection_id={req.connection_id}]\n\n"
-        f"{req.message}"
-    )
+    if req.connection_id:
+        conn = session.query(ConnectionConfig).get(req.connection_id)
+        if not conn:
+            raise HTTPException(404, "连接不存在")
+        context_message = (
+            f"[当前连接: {conn.name} ({conn.db_type}), "
+            f"数据库: {conn.database}, connection_id={req.connection_id}]\n\n"
+            f"{req.message}"
+        )
+        mode = "db"
+        conn_id = req.connection_id
+    else:
+        context_message = f"[API 测试助手模式]\n\n{req.message}"
+        mode = "api"
+        conn_id = 0
 
     return StreamingResponse(
-        ai_service.chat_stream(context_message, req.chat_history, req.connection_id),
+        ai_service.chat_stream(context_message, req.chat_history, conn_id, mode=mode),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -1,9 +1,10 @@
 """AI Agent 工具定义
 
-定义数据库操作工具，使用 OpenAI function calling 格式。
+定义数据库操作工具和 HTTP 请求工具，使用 OpenAI function calling 格式。
 工具实现为普通函数，由 ai_service.py 调用。
 """
 
+import json
 from typing import Optional
 from app.database import db_manager
 from app.models import ConnectionConfig
@@ -235,4 +236,652 @@ TOOL_FUNCTIONS = {
     "describe_table": _describe_table,
     "get_table_sample": _get_table_sample,
     "execute_sql": _execute_sql,
+}
+
+
+# ==================== HTTP 工具实现 ====================
+
+def _http_request(method: str, url: str, headers: Optional[dict] = None,
+                  params: Optional[dict] = None, body_type: str = "json",
+                  body: Optional[str] = None, description: str = "") -> str:
+    """同步包装：发送 HTTP 请求"""
+    import asyncio
+    from app.services.http_service import send_request
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(asyncio.run, send_request(
+                    method=method, url=url, headers=headers or {},
+                    params=params or {}, body_type=body_type or "none",
+                    body_raw=body or "",
+                )).result()
+        else:
+            result = loop.run_until_complete(send_request(
+                method=method, url=url, headers=headers or {},
+                params=params or {}, body_type=body_type or "none",
+                body_raw=body or "",
+            ))
+    except Exception as e:
+        return f"请求执行错误: {str(e)}"
+
+    if result.get("error"):
+        return f"请求失败: {result['error']}"
+
+    # 格式化输出
+    status = result["status_code"]
+    elapsed = result["elapsed_ms"]
+    body_preview = result.get("body", "")[:3000]
+
+    status_emoji = "✅" if 200 <= status < 300 else "⚠️" if 300 <= status < 400 else "❌"
+
+    lines = [
+        f"{status_emoji} {method.upper()} {url}",
+        f"状态码: {status} | 耗时: {elapsed}ms",
+        f"响应体:\n{body_preview}",
+    ]
+    return "\n".join(lines)
+
+
+def _save_api_request(name: str, method: str, url: str,
+                      collection_name: str = "默认集合",
+                      headers: Optional[dict] = None,
+                      body: Optional[str] = None,
+                      body_type: str = "json") -> str:
+    """保存请求到集合"""
+    from app.models import ApiCollection, ApiRequest, LocalSession
+    session = LocalSession()
+    try:
+        # 查找或创建集合
+        coll = session.query(ApiCollection).filter(
+            ApiCollection.name == collection_name
+        ).first()
+        if not coll:
+            coll = ApiCollection(name=collection_name)
+            session.add(coll)
+            session.commit()
+            session.refresh(coll)
+
+        req = ApiRequest(
+            collection_id=coll.id,
+            name=name,
+            method=method.upper(),
+            url=url,
+            headers=json.dumps(headers or {}, ensure_ascii=False),
+            body_type=body_type,
+            body_raw=body or "",
+        )
+        session.add(req)
+        session.commit()
+        return f"已保存请求 '{name}' 到集合 '{collection_name}'"
+    except Exception as e:
+        session.rollback()
+        return f"保存失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _list_api_collections() -> str:
+    """列出所有接口集合及其请求"""
+    from app.models import ApiCollection, ApiRequest, LocalSession
+    session = LocalSession()
+    try:
+        collections = session.query(ApiCollection).order_by(ApiCollection.id).all()
+        if not collections:
+            return "当前没有任何集合。"
+
+        lines = ["接口集合列表:"]
+        for coll in collections:
+            reqs = session.query(ApiRequest).filter(
+                ApiRequest.collection_id == coll.id
+            ).all()
+            lines.append(f"\n📁 {coll.name} ({len(reqs)} 个请求)")
+            for req in reqs:
+                lines.append(f"  - {req.method} {req.name}: {req.url}")
+                if req.body_raw:
+                    preview = req.body_raw[:100]
+                    lines.append(f"    请求体: {preview}{'...' if len(req.body_raw) > 100 else ''}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"查询失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _get_api_request(name: Optional[str] = None, collection_name: Optional[str] = None) -> str:
+    """根据名称或集合查询保存的接口请求"""
+    from app.models import ApiCollection, ApiRequest, LocalSession
+    session = LocalSession()
+    try:
+        query = session.query(ApiRequest)
+
+        if collection_name:
+            coll = session.query(ApiCollection).filter(
+                ApiCollection.name == collection_name
+            ).first()
+            if not coll:
+                return f"集合 '{collection_name}' 不存在"
+            query = query.filter(ApiRequest.collection_id == coll.id)
+
+        if name:
+            query = query.filter(ApiRequest.name.contains(name))
+
+        reqs = query.all()
+        if not reqs:
+            return "未找到匹配的请求"
+
+        lines = [f"找到 {len(reqs)} 个请求:"]
+        for req in reqs:
+            coll = session.query(ApiCollection).get(req.collection_id)
+            coll_name = coll.name if coll else "未知集合"
+            headers = json.loads(req.headers or "{}")
+            lines.append(f"\n📌 {req.name} (集合: {coll_name})")
+            lines.append(f"  方法: {req.method}")
+            lines.append(f"  URL: {req.url}")
+            if headers:
+                lines.append(f"  请求头: {json.dumps(headers, ensure_ascii=False)}")
+            if req.body_raw:
+                lines.append(f"  请求体: {req.body_raw[:500]}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"查询失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _update_api_request(name: str, new_name: Optional[str] = None,
+                        method: Optional[str] = None, url: Optional[str] = None,
+                        headers: Optional[dict] = None, body: Optional[str] = None,
+                        body_type: Optional[str] = None,
+                        collection_name: Optional[str] = None) -> str:
+    """更新已保存的接口请求"""
+    from app.models import ApiCollection, ApiRequest, LocalSession
+    session = LocalSession()
+    try:
+        req = session.query(ApiRequest).filter(ApiRequest.name.contains(name)).first()
+        if not req:
+            return f"未找到名称包含 '{name}' 的请求"
+
+        if new_name:
+            req.name = new_name
+        if method:
+            req.method = method.upper()
+        if url:
+            req.url = url
+        if headers is not None:
+            req.headers = json.dumps(headers, ensure_ascii=False)
+        if body is not None:
+            req.body_raw = body
+        if body_type:
+            req.body_type = body_type
+        if collection_name:
+            coll = session.query(ApiCollection).filter(
+                ApiCollection.name == collection_name
+            ).first()
+            if coll:
+                req.collection_id = coll.id
+            else:
+                return f"集合 '{collection_name}' 不存在"
+
+        session.commit()
+        return f"已更新请求 '{req.name}' (方法: {req.method}, URL: {req.url})"
+    except Exception as e:
+        session.rollback()
+        return f"更新失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _delete_api_request(name: str) -> str:
+    """删除已保存的接口请求"""
+    from app.models import ApiRequest, LocalSession
+    session = LocalSession()
+    try:
+        reqs = session.query(ApiRequest).filter(ApiRequest.name.contains(name)).all()
+        if not reqs:
+            return f"未找到名称包含 '{name}' 的请求"
+        if len(reqs) > 1:
+            names = [r.name for r in reqs]
+            return f"找到多个匹配的请求: {', '.join(names)}，请提供更精确的名称"
+
+        req = reqs[0]
+        req_name = req.name
+        session.delete(req)
+        session.commit()
+        return f"已删除请求 '{req_name}'"
+    except Exception as e:
+        session.rollback()
+        return f"删除失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _delete_api_collection(name: str) -> str:
+    """删除接口集合及其下所有请求"""
+    from app.models import ApiCollection, ApiRequest, LocalSession
+    session = LocalSession()
+    try:
+        coll = session.query(ApiCollection).filter(
+            ApiCollection.name.contains(name)
+        ).first()
+        if not coll:
+            return f"未找到名称包含 '{name}' 的集合"
+
+        req_count = session.query(ApiRequest).filter(
+            ApiRequest.collection_id == coll.id
+        ).count()
+        session.query(ApiRequest).filter(ApiRequest.collection_id == coll.id).delete()
+        coll_name = coll.name
+        session.delete(coll)
+        session.commit()
+        return f"已删除集合 '{coll_name}' 及其下 {req_count} 个请求"
+    except Exception as e:
+        session.rollback()
+        return f"删除失败: {str(e)}"
+    finally:
+        session.close()
+
+
+# ==================== 环境变量工具 ====================
+
+def _list_api_environments() -> str:
+    """列出所有环境变量配置"""
+    from app.models import ApiEnvironment, LocalSession
+    session = LocalSession()
+    try:
+        envs = session.query(ApiEnvironment).all()
+        if not envs:
+            return "当前没有任何环境变量配置。"
+
+        lines = ["环境变量列表:"]
+        for env in envs:
+            variables = json.loads(env.variables or "{}")
+            active_mark = " [当前激活]" if env.is_active else ""
+            lines.append(f"\n🌍 {env.name}{active_mark}")
+            if variables:
+                for k, v in variables.items():
+                    lines.append(f"  {k} = {v}")
+            else:
+                lines.append("  (无变量)")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"查询失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _create_api_environment(name: str, variables: Optional[dict] = None) -> str:
+    """创建新的环境变量配置"""
+    from app.models import ApiEnvironment, LocalSession
+    session = LocalSession()
+    try:
+        existing = session.query(ApiEnvironment).filter(
+            ApiEnvironment.name == name
+        ).first()
+        if existing:
+            return f"环境 '{name}' 已存在，如需修改请使用更新功能"
+
+        env = ApiEnvironment(
+            name=name,
+            variables=json.dumps(variables or {}, ensure_ascii=False),
+        )
+        session.add(env)
+        session.commit()
+        var_count = len(variables) if variables else 0
+        return f"已创建环境 '{name}'，包含 {var_count} 个变量"
+    except Exception as e:
+        session.rollback()
+        return f"创建失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _update_api_environment(name: str, new_name: Optional[str] = None,
+                            variables: Optional[dict] = None,
+                            merge_variables: bool = False) -> str:
+    """更新环境变量配置。merge_variables=True 时合并变量而非替换"""
+    from app.models import ApiEnvironment, LocalSession
+    session = LocalSession()
+    try:
+        env = session.query(ApiEnvironment).filter(
+            ApiEnvironment.name.contains(name)
+        ).first()
+        if not env:
+            return f"未找到名称包含 '{name}' 的环境"
+
+        if new_name:
+            env.name = new_name
+        if variables is not None:
+            if merge_variables:
+                existing = json.loads(env.variables or "{}")
+                existing.update(variables)
+                env.variables = json.dumps(existing, ensure_ascii=False)
+            else:
+                env.variables = json.dumps(variables, ensure_ascii=False)
+
+        session.commit()
+        final_vars = json.loads(env.variables or "{}")
+        return f"已更新环境 '{env.name}'，当前有 {len(final_vars)} 个变量"
+    except Exception as e:
+        session.rollback()
+        return f"更新失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _delete_api_environment(name: str) -> str:
+    """删除环境变量配置"""
+    from app.models import ApiEnvironment, LocalSession
+    session = LocalSession()
+    try:
+        env = session.query(ApiEnvironment).filter(
+            ApiEnvironment.name.contains(name)
+        ).first()
+        if not env:
+            return f"未找到名称包含 '{name}' 的环境"
+
+        env_name = env.name
+        session.delete(env)
+        session.commit()
+        return f"已删除环境 '{env_name}'"
+    except Exception as e:
+        session.rollback()
+        return f"删除失败: {str(e)}"
+    finally:
+        session.close()
+
+
+# ==================== 追加 HTTP 工具定义 ====================
+
+HTTP_TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": "发送 HTTP 请求到指定 URL，支持 GET/POST/PUT/DELETE/PATCH 等方法",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+                        "description": "HTTP 请求方法",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "完整的请求 URL",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "请求头，如 {\"Content-Type\": \"application/json\", \"Authorization\": \"Bearer xxx\"}",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "URL 查询参数",
+                    },
+                    "body_type": {
+                        "type": "string",
+                        "enum": ["none", "json", "form", "raw", "xml"],
+                        "description": "请求体类型，默认 json",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "请求体内容（JSON 字符串或原始文本）",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "本次请求的用途说明",
+                    },
+                },
+                "required": ["method", "url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_api_request",
+            "description": "将接口请求保存到集合中，方便后续复用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "请求名称，如 '登录接口'",
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP 方法",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "请求 URL",
+                    },
+                    "collection_name": {
+                        "type": "string",
+                        "description": "集合名称，默认 '默认集合'",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "请求头",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "请求体",
+                    },
+                    "body_type": {
+                        "type": "string",
+                        "description": "请求体类型",
+                    },
+                },
+                "required": ["name", "method", "url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_api_collections",
+            "description": "列出所有接口集合及其中的请求，查看已保存的接口列表",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_api_request",
+            "description": "根据名称或集合查询已保存的接口请求详情",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "请求名称（支持模糊匹配）",
+                    },
+                    "collection_name": {
+                        "type": "string",
+                        "description": "集合名称（可选，用于按集合筛选）",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_api_request",
+            "description": "更新已保存的接口请求（修改名称、URL、方法、请求体等）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要更新的请求名称（模糊匹配）",
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "新名称（可选）",
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "新的 HTTP 方法（可选）",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "新的 URL（可选）",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "新的请求头（可选）",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "新的请求体（可选）",
+                    },
+                    "body_type": {
+                        "type": "string",
+                        "description": "新的请求体类型（可选）",
+                    },
+                    "collection_name": {
+                        "type": "string",
+                        "description": "移动到指定集合（可选）",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_api_request",
+            "description": "删除已保存的接口请求",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要删除的请求名称（模糊匹配）",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_api_collection",
+            "description": "删除接口集合及其下所有请求",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要删除的集合名称（模糊匹配）",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    # ===== 环境变量工具 =====
+    {
+        "type": "function",
+        "function": {
+            "name": "list_api_environments",
+            "description": "列出所有环境变量配置及其中的变量",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_api_environment",
+            "description": "创建新的环境变量配置，可指定变量键值对",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "环境名称，如 '开发环境'、'测试环境'",
+                    },
+                    "variables": {
+                        "type": "object",
+                        "description": "变量键值对，如 {\"base_url\": \"https://api.dev.com\", \"token\": \"xxx\"}",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_api_environment",
+            "description": "更新环境变量配置（改名、修改变量）。merge_variables=True 时合并而非替换",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要更新的环境名称（模糊匹配）",
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "新名称（可选）",
+                    },
+                    "variables": {
+                        "type": "object",
+                        "description": "新的变量键值对",
+                    },
+                    "merge_variables": {
+                        "type": "boolean",
+                        "description": "true=合并到现有变量，false=完全替换（默认 false）",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_api_environment",
+            "description": "删除环境变量配置",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要删除的环境名称（模糊匹配）",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+]
+
+# HTTP 工具名 -> 实现函数
+HTTP_TOOL_FUNCTIONS = {
+    "http_request": _http_request,
+    "save_api_request": _save_api_request,
+    "list_api_collections": _list_api_collections,
+    "get_api_request": _get_api_request,
+    "update_api_request": _update_api_request,
+    "delete_api_request": _delete_api_request,
+    "delete_api_collection": _delete_api_collection,
+    "list_api_environments": _list_api_environments,
+    "create_api_environment": _create_api_environment,
+    "update_api_environment": _update_api_environment,
+    "delete_api_environment": _delete_api_environment,
 }

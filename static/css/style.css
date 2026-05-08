@@ -699,3 +699,53 @@
     background: #0f3460;
     color: white;
 }
+
+/* AI 对话中的 HTTP 请求卡片 */
+.http-request-card {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    font-size: 12px;
+}
+.http-request-card .card-header {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 4px;
+    font-family: 'Consolas', monospace;
+}
+.http-request-card .card-method {
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 2px;
+    font-size: 10px;
+}
+.http-request-card .card-url {
+    color: #9ca3af;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+.http-request-card .card-status {
+    font-weight: 600;
+    font-size: 11px;
+}
+.http-request-card .card-body {
+    color: #4a4a6a;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    max-height: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* HTTP 方法颜色 */
+.method-get { color: #6ee7b7; }
+.method-post { color: #fcd34d; }
+.method-put { color: #93c5fd; }
+.method-delete { color: #fca5a5; }
+.method-patch { color: #d8b4fe; }
+.method-head { color: #9ca3af; }
+.method-options { color: #9ca3af; }

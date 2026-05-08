@@ -12,6 +12,7 @@
     </div>
     <!-- 右侧按钮 -->
     <div class="flex items-center gap-2">
+        <a href="/api" class="text-muted hover:text-gray-300 text-sm px-3 py-1 rounded hover:bg-bg-lighter border border-border" title="API 调试工具">API</a>
         <!-- AI 模型选择器 -->
         <select id="ai-provider-select" class="bg-bg-lighter border border-border rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent-light max-w-[200px]" title="选择 AI 模型">
             <option value="">未配置 AI</option>
@@ -67,9 +68,7 @@
             <button class="modal-close text-muted hover:text-gray-300">&times;</button>
         </div>
         <div class="p-4 flex-1 overflow-auto">
-            <!-- 连接列表 -->
             <div id="conn-list" class="space-y-2 mb-4"></div>
-            <!-- 新建/编辑表单 -->
             <div class="border-t border-border pt-4">
                 <h4 class="text-xs text-muted mb-3" id="conn-form-title">新建连接</h4>
                 <input type="hidden" id="conn-edit-id">
@@ -125,9 +124,7 @@
             <button class="modal-close text-muted hover:text-gray-300">&times;</button>
         </div>
         <div class="p-4 flex-1 overflow-auto">
-            <!-- 已有提供商列表 -->
             <div id="provider-list" class="space-y-2 mb-4"></div>
-            <!-- 新建/编辑表单 -->
             <div class="border-t border-border pt-4">
                 <h4 class="text-xs text-muted mb-3" id="provider-form-title">添加 AI 提供商</h4>
                 <input type="hidden" id="provider-edit-id">
@@ -192,49 +189,48 @@
         </div>
     </div>
 </div>
-    </div>
 
-    <!-- 单元格编辑弹窗 -->
-    <div id="modal-cell-edit" class="fixed inset-0 bg-black/60 hidden z-50 flex items-center justify-center">
-        <div class="bg-bg-light border border-border rounded-lg w-[520px]">
-            <div class="flex items-center justify-between p-4 border-b border-border">
-                <h3 class="text-sm font-medium">编辑数据</h3>
-                <button class="modal-close text-muted hover:text-gray-300">&times;</button>
-            </div>
-            <div class="p-5 space-y-4">
-                <div class="grid grid-cols-3 gap-3 text-xs">
-                    <div>
-                        <span class="text-muted">表</span>
-                        <div id="cell-edit-table" class="font-mono text-gray-300 mt-1">-</div>
-                    </div>
-                    <div>
-                        <span class="text-muted">列</span>
-                        <div id="cell-edit-column" class="font-mono text-gray-300 mt-1">-</div>
-                    </div>
-                    <div>
-                        <span class="text-muted">定位条件</span>
-                        <div id="cell-edit-where" class="font-mono text-yellow-400 mt-1 truncate" title="">-</div>
-                    </div>
+<!-- 单元格编辑弹窗 -->
+<div id="modal-cell-edit" class="fixed inset-0 bg-black/60 hidden z-50 flex items-center justify-center">
+    <div class="bg-bg-light border border-border rounded-lg w-[520px]">
+        <div class="flex items-center justify-between p-4 border-b border-border">
+            <h3 class="text-sm font-medium">编辑数据</h3>
+            <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+        </div>
+        <div class="p-5 space-y-4">
+            <div class="grid grid-cols-3 gap-3 text-xs">
+                <div>
+                    <span class="text-muted">表</span>
+                    <div id="cell-edit-table" class="font-mono text-gray-300 mt-1">-</div>
                 </div>
                 <div>
-                    <div class="flex items-center gap-3 mb-2">
-                        <label class="text-xs text-muted shrink-0">原始值</label>
-                        <code id="cell-edit-old" class="text-xs text-muted bg-bg px-2 py-0.5 rounded flex-1 truncate">-</code>
-                    </div>
-                    <div>
-                        <label class="text-xs text-muted block mb-1">新值</label>
-                        <textarea id="cell-edit-new" rows="6" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-accent-light resize-y"></textarea>
-                    </div>
-                    <div class="flex items-center gap-2 mt-1.5">
-                        <input id="cell-edit-null" type="checkbox" class="accent-red-500">
-                        <label for="cell-edit-null" class="text-xs text-muted cursor-pointer">设为 NULL</label>
-                    </div>
+                    <span class="text-muted">列</span>
+                    <div id="cell-edit-column" class="font-mono text-gray-300 mt-1">-</div>
                 </div>
-                <div class="flex gap-2 justify-end pt-1">
-                    <button id="btn-cell-edit-cancel" class="bg-bg border border-border hover:border-muted text-sm px-4 py-1.5 rounded">取消</button>
-                    <button id="btn-cell-edit-ok" class="bg-red-600 hover:bg-red-700 text-white text-sm px-4 py-1.5 rounded">确认修改</button>
+                <div>
+                    <span class="text-muted">定位条件</span>
+                    <div id="cell-edit-where" class="font-mono text-yellow-400 mt-1 truncate" title="">-</div>
                 </div>
+            </div>
+            <div>
+                <div class="flex items-center gap-3 mb-2">
+                    <label class="text-xs text-muted shrink-0">原始值</label>
+                    <code id="cell-edit-old" class="text-xs text-muted bg-bg px-2 py-0.5 rounded flex-1 truncate">-</code>
+                </div>
+                <div>
+                    <label class="text-xs text-muted block mb-1">新值</label>
+                    <textarea id="cell-edit-new" rows="6" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-accent-light resize-y"></textarea>
+                </div>
+                <div class="flex items-center gap-2 mt-1.5">
+                    <input id="cell-edit-null" type="checkbox" class="accent-red-500">
+                    <label for="cell-edit-null" class="text-xs text-muted cursor-pointer">设为 NULL</label>
+                </div>
+            </div>
+            <div class="flex gap-2 justify-end pt-1">
+                <button id="btn-cell-edit-cancel" class="bg-bg border border-border hover:border-muted text-sm px-4 py-1.5 rounded">取消</button>
+                <button id="btn-cell-edit-ok" class="bg-red-600 hover:bg-red-700 text-white text-sm px-4 py-1.5 rounded">确认修改</button>
             </div>
         </div>
     </div>
+</div>
 {% endblock %}
