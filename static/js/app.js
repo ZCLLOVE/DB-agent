@@ -512,6 +512,7 @@ async function showTableData(tableName) {
                         <input type="checkbox" class="accent-red-500" id="data-select-all-${activeTab.id}"> <span class="text-xs">全选</span>
                     </label>
                     <button class="bg-primary hover:bg-red-500 text-white text-xs px-3 py-0.5 rounded" id="data-ask-ai-${activeTab.id}">问 AI</button>
+                    <button class="text-xs px-3 py-0.5 rounded border border-border hover:border-accent-light hover:text-accent-light" id="data-view-${activeTab.id}">视图</button>
                 </span>
             `;
             const resultWrapper = document.getElementById(`sql-result-${activeTab.id}`);
@@ -530,6 +531,8 @@ async function showTableData(tableName) {
                 });
                 sendHistoryToAi(selectedData, { table: tableName, type: 'data' });
             };
+            const viewBtn = infoEl.querySelector(`#data-view-${activeTab.id}`);
+            if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(activeTab.id);
         }
     } catch (e) {
         alert('加载数据失败: ' + e.message);
@@ -594,6 +597,9 @@ function rebindDataActionBar(tabId) {
         });
         sendHistoryToAi(selectedData, { table: tab._tableData?.tableName || '', type: 'data' });
     };
+    // 重新绑定视图按钮
+    const viewBtn = info.querySelector(`#data-view-${tabId}`);
+    if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(tabId);
 }
 
 // ==================== Tab 管理 ====================
@@ -939,6 +945,87 @@ function createAiPanel(tab) {
     return panel;
 }
 
+// ==================== 列视图（显示/隐藏列） ====================
+function showColumnVisibilityPopup(tabId) {
+    document.querySelectorAll('.col-visibility-popup').forEach(m => m.remove());
+
+    const wrapper = document.getElementById(`sql-result-${tabId}`);
+    const ctx = wrapper?._colVisCtx;
+    if (!ctx) return;
+
+    const { colVisible, columns, commentMap, applyColVisibility } = ctx;
+    const tempVisible = [...colVisible];
+
+    const popup = document.createElement('div');
+    popup.className = 'col-visibility-popup fixed inset-0 bg-black/60 z-50 flex items-center justify-center';
+
+    const box = document.createElement('div');
+    box.className = 'bg-bg-light border border-border rounded-lg w-[360px] max-h-[70vh] flex flex-col';
+    box.innerHTML = `
+        <div class="flex items-center justify-between p-4 border-b border-border">
+            <h3 class="text-sm font-medium">列视图</h3>
+            <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+        </div>
+        <div class="p-3 flex gap-2 border-b border-border">
+            <button class="text-xs text-muted hover:text-gray-300 px-2 py-0.5 rounded border border-border" id="col-vis-select-all">全选</button>
+            <button class="text-xs text-muted hover:text-gray-300 px-2 py-0.5 rounded border border-border" id="col-vis-deselect-all">全不选</button>
+        </div>
+        <div class="flex-1 overflow-auto p-3 space-y-1" id="col-vis-list"></div>
+        <div class="flex gap-2 p-3 border-t border-border justify-end">
+            <button class="bg-bg border border-border hover:border-muted text-sm px-4 py-1.5 rounded" id="col-vis-cancel">取消</button>
+            <button class="bg-accent hover:bg-accent-light text-white text-sm px-4 py-1.5 rounded" id="col-vis-confirm">确认</button>
+        </div>
+    `;
+    popup.appendChild(box);
+    document.body.appendChild(popup);
+
+    // 填充列复选框
+    const list = box.querySelector('#col-vis-list');
+    columns.forEach((col, i) => {
+        const comment = commentMap[col] || '';
+        const label = document.createElement('label');
+        label.className = 'flex items-center gap-2 text-sm cursor-pointer py-1';
+        label.innerHTML = `
+            <input type="checkbox" class="col-vis-cb accent-red-500" data-col-idx="${i}" ${tempVisible[i] ? 'checked' : ''}>
+            <span>${escapeHtml(col)}</span>
+            ${comment ? `<span class="text-xs text-muted">(${escapeHtml(comment)})</span>` : ''}
+        `;
+        label.querySelector('input').onchange = (e) => {
+            tempVisible[i] = e.target.checked;
+        };
+        list.appendChild(label);
+    });
+
+    // 全选 / 全不选
+    box.querySelector('#col-vis-select-all').onclick = () => {
+        tempVisible.fill(true);
+        list.querySelectorAll('.col-vis-cb').forEach(cb => cb.checked = true);
+    };
+    box.querySelector('#col-vis-deselect-all').onclick = () => {
+        tempVisible.fill(false);
+        list.querySelectorAll('.col-vis-cb').forEach(cb => cb.checked = false);
+    };
+
+    // 关闭
+    const close = () => popup.remove();
+    box.querySelector('.modal-close').onclick = close;
+    box.querySelector('#col-vis-cancel').onclick = close;
+    popup.onclick = (e) => { if (e.target === popup) close(); };
+
+    // 确认：更新闭包内的 colVisible 数组，然后 applyColVisibility
+    box.querySelector('#col-vis-confirm').onclick = () => {
+        if (tempVisible.every(v => !v)) {
+            alert('至少需要勾选一列');
+            return;
+        }
+        for (let i = 0; i < columns.length; i++) {
+            colVisible[i] = tempVisible[i];
+        }
+        applyColVisibility();
+        popup.remove();
+    };
+}
+
 // ==================== SQL 执行 ====================
 let pendingConfirmTabId = null;
 let pendingConfirmSql = null;
@@ -1039,6 +1126,7 @@ function renderResultTable(tabId, data) {
 
     let sortCol = -1, sortAsc = true;
     const colFilters = {}; // 列索引 -> { op, value } 活动筛选
+    const colVisible = columns.map(() => true); // 列可见性
     const table = document.createElement('table');
     table.className = 'data-table';
 
@@ -1172,8 +1260,23 @@ function renderResultTable(tabId, data) {
             });
             tbody.appendChild(tr);
         });
+        // 同步列可见性
+        applyColVisibility();
     }
     renderRows();
+
+    // 应用列可见性到 thead + tbody
+    function applyColVisibility() {
+        const allThs = headerRow.children;
+        columns.forEach((_, i) => {
+            const domIdx = i + 1;
+            const vis = colVisible[i] ? '' : 'none';
+            if (allThs[domIdx]) allThs[domIdx].style.display = vis;
+            tbody.querySelectorAll('tr').forEach(tr => {
+                if (tr.children[domIdx]) tr.children[domIdx].style.display = vis;
+            });
+        });
+    }
 
     // 渲染筛选标签到结果信息栏
     function renderFilterTags() {
@@ -1327,9 +1430,31 @@ function renderResultTable(tabId, data) {
 
     wrapper.innerHTML = '';
     wrapper.appendChild(table);
+    // 存储列可见性上下文，供 showColumnVisibilityPopup 使用
+    wrapper._colVisCtx = { colVisible, columns, headerRow, tbody, commentMap, applyColVisibility };
 
     // 更新保存按钮状态
     refreshSaveBtn();
+
+    // 在信息栏添加"视图"按钮（控制列显示/隐藏）
+    const infoBar = document.getElementById(`sql-result-info-${tabId}`);
+    if (infoBar) {
+        let actions = infoBar.querySelector('.result-info-actions');
+        if (!actions) {
+            actions = document.createElement('span');
+            actions.className = 'result-info-actions flex items-center gap-2';
+            infoBar.appendChild(actions);
+            infoBar.style.display = 'flex';
+            infoBar.style.alignItems = 'center';
+            infoBar.style.justifyContent = 'space-between';
+        }
+        const viewBtn = document.createElement('button');
+        viewBtn.id = `data-view-${tabId}`;
+        viewBtn.className = 'text-xs px-3 py-0.5 rounded border border-border hover:border-accent-light hover:text-accent-light';
+        viewBtn.textContent = '视图';
+        viewBtn.onclick = () => showColumnVisibilityPopup(tabId);
+        actions.appendChild(viewBtn);
+    }
 
     // ---- 单元格编辑弹窗 ----
     function openCellEditModal(td, rowIdx, colIdx, originalValue, row) {
