@@ -734,8 +734,14 @@ function renderTabContent() {
                 t.sql = t.editor.getValue();
                 t.editor = null;
             }
+            // 保存结果区 DOM 节点（保留事件绑定，不用 innerHTML）
             const result = document.getElementById(`sql-result-${t.id}`);
-            if (result) t._savedResultHtml = result.innerHTML;
+            if (result) {
+                t._savedResultFragment = document.createDocumentFragment();
+                while (result.firstChild) {
+                    t._savedResultFragment.appendChild(result.firstChild);
+                }
+            }
             const info = document.getElementById(`sql-result-info-${t.id}`);
             if (info) t._savedResultInfo = info.innerHTML;
         }
@@ -749,11 +755,14 @@ function renderTabContent() {
     if (tab.type === 'sql') {
         const panel = createSqlPanel(tab);
         container.appendChild(panel);
-        // 恢复结果区内容
-        if (tab._savedResultHtml) {
+        // 恢复结果区内容（用 DOM 节点而非 innerHTML，保留事件绑定）
+        if (tab._savedResultFragment) {
             setTimeout(() => {
                 const result = document.getElementById(`sql-result-${tab.id}`);
-                if (result) result.innerHTML = tab._savedResultHtml;
+                if (result) {
+                    result.innerHTML = '';
+                    result.appendChild(tab._savedResultFragment);
+                }
                 const info = document.getElementById(`sql-result-info-${tab.id}`);
                 if (info && tab._savedResultInfo) info.innerHTML = tab._savedResultInfo;
                 // 重新绑定 info 栏里的按钮事件
