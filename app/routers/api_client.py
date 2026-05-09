@@ -78,10 +78,16 @@ def update_collection(coll_id: int, body: dict, session: Session = Depends(get_l
 
 @router.delete("/collections/{coll_id}")
 def delete_collection(coll_id: int, session: Session = Depends(get_local_session)):
-    """删除集合及其下所有请求"""
-    # 删除子请求
-    session.query(ApiRequest).filter(ApiRequest.collection_id == coll_id).delete()
-    session.query(ApiCollection).filter(ApiCollection.id == coll_id).delete()
+    """删除集合及其下所有请求和子集合"""
+
+    def _delete_recursive(pid):
+        children = session.query(ApiCollection).filter(ApiCollection.parent_id == pid).all()
+        for child in children:
+            _delete_recursive(child.id)
+        session.query(ApiRequest).filter(ApiRequest.collection_id == pid).delete()
+        session.query(ApiCollection).filter(ApiCollection.id == pid).delete()
+
+    _delete_recursive(coll_id)
     session.commit()
     return {"ok": True}
 

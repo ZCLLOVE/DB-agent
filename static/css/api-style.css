@@ -89,6 +89,23 @@
 .api-coll-item .coll-icon { font-size: 12px; flex-shrink: 0; }
 .api-coll-item .coll-label { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 
+.api-coll-item .coll-toggle {
+    font-size: 10px;
+    width: 12px;
+    text-align: center;
+    flex-shrink: 0;
+    color: #6b7280;
+    transition: transform 0.15s;
+}
+
+.coll-children {
+    overflow: hidden;
+}
+
+.coll-children.collapsed {
+    display: none;
+}
+
 .api-coll-item .coll-actions {
     display: none;
     gap: 2px;

@@ -324,25 +324,41 @@ def _save_api_request(name: str, method: str, url: str,
 
 
 def _list_api_collections() -> str:
-    """列出所有接口集合及其请求"""
+    """列出所有接口集合及其请求（树形展示）"""
     from app.models import ApiCollection, ApiRequest, LocalSession
     session = LocalSession()
     try:
-        collections = session.query(ApiCollection).order_by(ApiCollection.id).all()
+        collections = session.query(ApiCollection).order_by(ApiCollection.sort_order, ApiCollection.id).all()
         if not collections:
             return "当前没有任何集合。"
 
-        lines = ["接口集合列表:"]
+        # 构建树
+        coll_map = {c.id: c for c in collections}
+        reqs_by_coll = {}
         for coll in collections:
-            reqs = session.query(ApiRequest).filter(
+            reqs_by_coll[coll.id] = session.query(ApiRequest).filter(
                 ApiRequest.collection_id == coll.id
             ).all()
-            lines.append(f"\n📁 {coll.name} ({len(reqs)} 个请求)")
-            for req in reqs:
-                lines.append(f"  - {req.method} {req.name}: {req.url}")
-                if req.body_raw:
-                    preview = req.body_raw[:100]
-                    lines.append(f"    请求体: {preview}{'...' if len(req.body_raw) > 100 else ''}")
+
+        lines = ["接口集合列表:"]
+
+        def render_tree(parent_id, depth):
+            children = [c for c in collections if c.parent_id == parent_id]
+            for coll in children:
+                reqs = reqs_by_coll.get(coll.id, [])
+                indent = "  " * depth
+                parent_info = ""
+                if coll.parent_id and coll.parent_id in coll_map:
+                    parent_info = f" (父集合: {coll_map[coll.parent_id].name})"
+                lines.append(f"{indent}📁 {coll.name} ({len(reqs)} 个请求){parent_info}")
+                for req in reqs:
+                    lines.append(f"{indent}  - {req.method} {req.name}: {req.url}")
+                    if req.body_raw:
+                        preview = req.body_raw[:100]
+                        lines.append(f"{indent}    请求体: {preview}{'...' if len(req.body_raw) > 100 else ''}")
+                render_tree(coll.id, depth + 1)
+
+        render_tree(None, 0)
         return "\n".join(lines)
     except Exception as e:
         return f"查询失败: {str(e)}"
@@ -469,17 +485,88 @@ def _delete_api_collection(name: str) -> str:
         if not coll:
             return f"未找到名称包含 '{name}' 的集合"
 
-        req_count = session.query(ApiRequest).filter(
-            ApiRequest.collection_id == coll.id
+        # 递归收集所有后代集合 ID
+        def collect_descendants(pid):
+            ids = [pid]
+            children = session.query(ApiCollection).filter(ApiCollection.parent_id == pid).all()
+            for child in children:
+                ids.extend(collect_descendants(child.id))
+            return ids
+
+        desc_ids = collect_descendants(coll.id)
+        total_reqs = session.query(ApiRequest).filter(
+            ApiRequest.collection_id.in_(desc_ids)
         ).count()
-        session.query(ApiRequest).filter(ApiRequest.collection_id == coll.id).delete()
-        coll_name = coll.name
-        session.delete(coll)
+
+        # 先删请求再删集合
+        session.query(ApiRequest).filter(ApiRequest.collection_id.in_(desc_ids)).delete(synchronize_session=False)
+        session.query(ApiCollection).filter(ApiCollection.id.in_(desc_ids)).delete(synchronize_session=False)
         session.commit()
-        return f"已删除集合 '{coll_name}' 及其下 {req_count} 个请求"
+        return f"已删除集合 '{coll.name}' 及其 {len(desc_ids)} 个子集合，共 {total_reqs} 个请求"
     except Exception as e:
         session.rollback()
         return f"删除失败: {str(e)}"
+    finally:
+        session.close()
+
+
+def _update_api_collection(name: str, new_name: Optional[str] = None,
+                           parent_name: Optional[str] = None,
+                           move_to_top: bool = False) -> str:
+    """修改集合名称或移动集合到其他集合下/顶级"""
+    from app.models import ApiCollection, LocalSession
+    session = LocalSession()
+    try:
+        coll = session.query(ApiCollection).filter(
+            ApiCollection.name.contains(name)
+        ).first()
+        if not coll:
+            return f"未找到名称包含 '{name}' 的集合"
+
+        changes = []
+
+        # 修改名称
+        if new_name:
+            changes.append(f"名称: '{coll.name}' -> '{new_name}'")
+            coll.name = new_name
+
+        # 移动位置
+        if move_to_top:
+            changes.append(f"移动到顶级集合")
+            coll.parent_id = None
+        elif parent_name is not None:
+            # parent_name 为空字符串时也表示移到顶级
+            if parent_name == "":
+                changes.append(f"移动到顶级集合")
+                coll.parent_id = None
+            else:
+                parent = session.query(ApiCollection).filter(
+                    ApiCollection.name.contains(parent_name)
+                ).first()
+                if not parent:
+                    return f"未找到名称包含 '{parent_name}' 的目标集合"
+                if parent.id == coll.id:
+                    return "不能将集合移动到自身下面"
+                # 检查是否会形成循环（目标不能是当前集合的后代）
+                desc_ids = set()
+                def collect_desc(pid):
+                    for c in session.query(ApiCollection).filter(ApiCollection.parent_id == pid).all():
+                        desc_ids.add(c.id)
+                        collect_desc(c.id)
+                collect_desc(coll.id)
+                if parent.id in desc_ids:
+                    return f"不能将集合移动到其子集合 '{parent.name}' 下面，会形成循环"
+                changes.append(f"移动到集合 '{parent.name}' 下面")
+                coll.parent_id = parent.id
+
+        if not changes:
+            return "未指定任何修改操作，请提供 new_name、parent_name 或 move_to_top 参数"
+
+        session.commit()
+        return f"已更新集合: " + "，".join(changes)
+    except Exception as e:
+        session.rollback()
+        return f"更新失败: {str(e)}"
     finally:
         session.close()
 
@@ -776,8 +863,37 @@ HTTP_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "update_api_collection",
+            "description": "修改集合名称或将集合移动到其他集合下面/移到顶级。支持集合的层级管理。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "要修改的集合名称（模糊匹配）",
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "新名称（可选）",
+                    },
+                    "parent_name": {
+                        "type": "string",
+                        "description": "移动到指定名称的集合下面（模糊匹配）。设为空字符串表示移到顶级。",
+                    },
+                    "move_to_top": {
+                        "type": "boolean",
+                        "description": "true 时移动到顶级（无父集合），默认 false",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delete_api_collection",
-            "description": "删除接口集合及其下所有请求",
+            "description": "删除接口集合及其下所有请求和子集合",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -880,6 +996,7 @@ HTTP_TOOL_FUNCTIONS = {
     "update_api_request": _update_api_request,
     "delete_api_request": _delete_api_request,
     "delete_api_collection": _delete_api_collection,
+    "update_api_collection": _update_api_collection,
     "list_api_environments": _list_api_environments,
     "create_api_environment": _create_api_environment,
     "update_api_environment": _update_api_environment,

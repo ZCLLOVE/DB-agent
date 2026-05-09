@@ -60,6 +60,32 @@ def _replace_vars_dict(d: dict, variables: dict) -> dict:
     return {k: _replace_vars(str(v), variables) for k, v in d.items()}
 
 
+# 环境变量 key -> HTTP Header 映射
+_ENV_HEADER_MAP = {
+    "authorization": "Authorization",
+    "token": "Authorization",
+    "content_type": "Content-Type",
+}
+
+
+def _inject_env_headers(headers: dict, variables: dict):
+    """将环境变量中的常用认证/头信息自动注入到请求头（用户未手动设置时）"""
+    if not variables:
+        return
+    for var_key, header_key in _ENV_HEADER_MAP.items():
+        var_val = variables.get(var_key)
+        if var_val is None:
+            continue
+        # 跳过已被用户手动设置（含占位符的已被 _replace_vars_dict 处理过）
+        header_lower = header_key.lower()
+        if not any(k.lower() == header_lower for k in headers):
+            # token 类型自动加 Bearer 前缀（如果值本身不是 Bearer 开头）
+            if var_key == "token" and not str(var_val).startswith("Bearer "):
+                headers[header_key] = f"Bearer {var_val}"
+            else:
+                headers[header_key] = str(var_val)
+
+
 async def send_request(
     method: str,
     url: str,
@@ -79,6 +105,9 @@ async def send_request(
     headers = _replace_vars_dict(headers or {}, variables)
     params = _replace_vars_dict(params or {}, variables)
     body_raw = _replace_vars(body_raw, variables)
+
+    # 自动注入环境变量中常见的 Header 变量
+    _inject_env_headers(headers, variables)
 
     # 自动拼接 base_url
     base_url = _get_active_env_base_url()
@@ -218,6 +247,7 @@ def generate_curl(method: str, url: str, headers: dict, params: dict,
     url = _replace_vars(url, variables)
     headers = _replace_vars_dict(headers or {}, variables)
     params = _replace_vars_dict(params or {}, variables)
+    _inject_env_headers(headers, variables)
 
     # 自动拼接 base_url
     base_url = _get_active_env_base_url()

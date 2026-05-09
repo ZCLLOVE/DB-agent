@@ -14,6 +14,8 @@ const state = {
     tabCounter: 0,
     // AI 对话（全局共享）
     chatHistory: [],
+    // 集合折叠状态
+    collapsedCollections: new Set(),
 };
 
 // ==================== 工具 ====================
@@ -373,21 +375,54 @@ function renderCollectionTree() {
     // 收集所有 tab 的 savedId 用于标记 active
     const activeSavedIds = new Set(state.tabs.filter(t => t.req.savedId).map(t => t.req.savedId));
 
-    state.collections.forEach(coll => {
+    // 构建树形结构
+    const collMap = {};
+    state.collections.forEach(c => collMap[c.id] = { ...c, children: [], requests: [] });
+    state.allRequests.forEach(r => {
+        if (collMap[r.collection_id]) collMap[r.collection_id].requests.push(r);
+    });
+    const roots = [];
+    state.collections.forEach(c => {
+        const node = collMap[c.id];
+        if (c.parent_id && collMap[c.parent_id]) {
+            collMap[c.parent_id].children.push(node);
+        } else {
+            roots.push(node);
+        }
+    });
+
+    // 递归渲染
+    function renderNode(node, depth, container) {
+        const isCollapsed = state.collapsedCollections.has(node.id);
+        const indent = depth * 16;
+
         const collDiv = document.createElement('div');
         collDiv.className = 'api-coll-item';
+        collDiv.style.paddingLeft = (8 + indent) + 'px';
+        collDiv.onclick = (e) => {
+            if (e.target.closest('.coll-actions')) return;
+            toggleCollCollapse(node.id);
+        };
         collDiv.innerHTML = `
+            <span class="coll-toggle">${isCollapsed ? '▸' : '▾'}</span>
             <span class="coll-icon">📁</span>
-            <span class="coll-label">${escapeHtml(coll.name)}</span>
+            <span class="coll-label">${escapeHtml(node.name)}</span>
             <span class="coll-actions">
-                <button title="新建请求" onclick="event.stopPropagation();newRequestInColl(${coll.id})">+</button>
-                <button title="删除" onclick="event.stopPropagation();deleteColl(${coll.id})">🗑</button>
+                <button title="新建子集合" onclick="event.stopPropagation();newSubCollection(${node.id})">📁+</button>
+                <button title="新建请求" onclick="event.stopPropagation();newRequestInColl(${node.id})">+</button>
+                <button title="删除" onclick="event.stopPropagation();deleteColl(${node.id})">🗑</button>
             </span>
         `;
-        tree.appendChild(collDiv);
+        container.appendChild(collDiv);
 
-        const collReqs = state.allRequests.filter(r => r.collection_id === coll.id);
-        collReqs.forEach(req => {
+        const childrenDiv = document.createElement('div');
+        childrenDiv.className = `coll-children ${isCollapsed ? 'collapsed' : ''}`;
+
+        // 子集合（递归）
+        node.children.forEach(child => renderNode(child, depth + 1, childrenDiv));
+
+        // 请求
+        node.requests.forEach(req => {
             if (search) {
                 const match = (req.name || '').toLowerCase().includes(search)
                     || (req.url || '').toLowerCase().includes(search);
@@ -396,6 +431,7 @@ function renderCollectionTree() {
             const m = (req.method || 'get').toLowerCase();
             const item = document.createElement('div');
             item.className = `api-req-item ${activeSavedIds.has(req.id) ? 'active' : ''}`;
+            item.style.paddingLeft = (22 + indent) + 'px';
             item.innerHTML = `
                 <span class="req-method method-${m}">${req.method || 'GET'}</span>
                 <span class="req-label">${escapeHtml(req.name)}</span>
@@ -404,12 +440,33 @@ function renderCollectionTree() {
                 </span>
             `;
             item.onclick = () => openRequestInTab(req);
-            tree.appendChild(item);
+            childrenDiv.appendChild(item);
         });
-    });
+        container.appendChild(childrenDiv);
+    }
+
+    roots.forEach(node => renderNode(node, 0, tree));
 }
 
 function filterSidebar(kw) { renderCollectionTree(); }
+
+function toggleCollCollapse(collId) {
+    if (state.collapsedCollections.has(collId)) {
+        state.collapsedCollections.delete(collId);
+    } else {
+        state.collapsedCollections.add(collId);
+    }
+    renderCollectionTree();
+}
+
+async function newSubCollection(parentId) {
+    const name = prompt('子集合名称:');
+    if (!name) return;
+    try {
+        await api('POST', '/api/http/collections', { name, parent_id: parentId });
+        loadCollections();
+    } catch (e) { alert('创建失败: ' + e.message); }
+}
 
 function openRequestInTab(req) {
     // 如果已有 tab 打开了该请求，切换过去
@@ -436,9 +493,20 @@ async function newRequestInColl(collId) {
 }
 
 async function deleteColl(id) {
-    if (!confirm('删除此集合及所有请求？')) return;
+    if (!confirm('删除此集合及所有子集合和请求？')) return;
+    // 收集所有后代集合 ID
+    const collMap = {};
+    state.collections.forEach(c => collMap[c.id] = c);
+    const descIds = [id];
+    function collectDesc(pid) {
+        state.collections.filter(c => c.parent_id === pid).forEach(c => {
+            descIds.push(c.id);
+            collectDesc(c.id);
+        });
+    }
+    collectDesc(id);
     // 关闭关联的 tab
-    const affected = state.allRequests.filter(r => r.collection_id === id).map(r => r.id);
+    const affected = state.allRequests.filter(r => descIds.includes(r.collection_id)).map(r => r.id);
     const toClose = state.tabs.filter(t => affected.includes(t.req.savedId)).map(t => t.id);
     toClose.forEach(tid => closeTab(tid));
     await api('DELETE', `/api/http/collections/${id}`);
@@ -499,11 +567,32 @@ function openSaveAsModal(tab) {
     if (state.collections.length === 0) {
         sel.innerHTML = '<option value="">请先创建集合</option>';
     } else {
+        // 构建树形下拉
+        const collMap = {};
+        state.collections.forEach(c => collMap[c.id] = c);
+        const childIds = new Set(state.collections.filter(c => c.parent_id).map(c => c.parent_id));
+        const visited = new Set();
+
+        function addOptions(parentId, depth) {
+            state.collections.filter(c => c.parent_id === parentId).forEach(c => {
+                if (visited.has(c.id)) return;
+                visited.add(c.id);
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = '\u00A0\u00A0'.repeat(depth) + (depth > 0 ? '└ ' : '') + c.name;
+                sel.appendChild(opt);
+                addOptions(c.id, depth + 1);
+            });
+        }
+        addOptions(null, 0);
+        // 兜底：未被遍历到的（数据不一致）
         state.collections.forEach(c => {
-            const opt = document.createElement('option');
-            opt.value = c.id;
-            opt.textContent = c.name;
-            sel.appendChild(opt);
+            if (!visited.has(c.id)) {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                sel.appendChild(opt);
+            }
         });
     }
     const urlPart = tab.req.url.replace(/^https?:\/\//, '').split('/')[0] || '未命名';
