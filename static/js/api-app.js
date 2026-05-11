@@ -372,9 +372,6 @@ function renderCollectionTree() {
         return;
     }
 
-    // 收集所有 tab 的 savedId 用于标记 active
-    const activeSavedIds = new Set(state.tabs.filter(t => t.req.savedId).map(t => t.req.savedId));
-
     // 构建树形结构
     const collMap = {};
     state.collections.forEach(c => collMap[c.id] = { ...c, children: [], requests: [] });
@@ -430,7 +427,7 @@ function renderCollectionTree() {
             }
             const m = (req.method || 'get').toLowerCase();
             const item = document.createElement('div');
-            item.className = `api-req-item ${activeSavedIds.has(req.id) ? 'active' : ''}`;
+            item.className = `api-req-item`;
             item.style.paddingLeft = (22 + indent) + 'px';
             item.innerHTML = `
                 <span class="req-method method-${m}">${req.method || 'GET'}</span>

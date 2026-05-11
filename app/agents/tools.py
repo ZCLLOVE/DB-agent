@@ -287,6 +287,7 @@ def _http_request(method: str, url: str, headers: Optional[dict] = None,
 
 def _save_api_request(name: str, method: str, url: str,
                       collection_name: str = "默认集合",
+                      params: Optional[dict] = None,
                       headers: Optional[dict] = None,
                       body: Optional[str] = None,
                       body_type: str = "json") -> str:
@@ -309,6 +310,7 @@ def _save_api_request(name: str, method: str, url: str,
             name=name,
             method=method.upper(),
             url=url,
+            params=json.dumps(params or {}, ensure_ascii=False),
             headers=json.dumps(headers or {}, ensure_ascii=False),
             body_type=body_type,
             body_raw=body or "",
@@ -409,6 +411,7 @@ def _get_api_request(name: Optional[str] = None, collection_name: Optional[str] 
 
 def _update_api_request(name: str, new_name: Optional[str] = None,
                         method: Optional[str] = None, url: Optional[str] = None,
+                        params: Optional[dict] = None,
                         headers: Optional[dict] = None, body: Optional[str] = None,
                         body_type: Optional[str] = None,
                         collection_name: Optional[str] = None) -> str:
@@ -426,6 +429,8 @@ def _update_api_request(name: str, new_name: Optional[str] = None,
             req.method = method.upper()
         if url:
             req.url = url
+        if params is not None:
+            req.params = json.dumps(params, ensure_ascii=False)
         if headers is not None:
             req.headers = json.dumps(headers, ensure_ascii=False)
         if body is not None:
@@ -744,7 +749,11 @@ HTTP_TOOL_DEFINITIONS = [
                     },
                     "url": {
                         "type": "string",
-                        "description": "请求 URL",
+                        "description": "请求路径（只保存端口之后的部分，不含协议、主机、端口和查询参数），如 '/api/users'",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "URL 查询参数，如 {\"instanceId\": \"xxx\", \"page\": \"1\"}。不要把查询参数拼在 url 里",
                     },
                     "collection_name": {
                         "type": "string",
@@ -820,7 +829,11 @@ HTTP_TOOL_DEFINITIONS = [
                     },
                     "url": {
                         "type": "string",
-                        "description": "新的 URL（可选）",
+                        "description": "新的请求路径（只保存端口之后的部分，不含协议、主机、端口和查询参数），如 '/api/users'",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "新的 URL 查询参数（可选），如 {\"instanceId\": \"xxx\"}。不要把查询参数拼在 url 里",
                     },
                     "headers": {
                         "type": "object",
