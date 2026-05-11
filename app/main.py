@@ -30,12 +30,13 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 # 注册路由
-from app.routers import connection, table, sql, ai, api_client
+from app.routers import connection, table, sql, ai, api_client, secret
 app.include_router(connection.router)
 app.include_router(table.router)
 app.include_router(sql.router)
 app.include_router(ai.router)
 app.include_router(api_client.router)
+app.include_router(secret.router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -48,6 +49,12 @@ async def index(request: Request):
 async def api_page(request: Request):
     """API 测试页"""
     return templates.TemplateResponse("api.html", {"request": request})
+
+
+@app.get("/secret", response_class=HTMLResponse)
+async def secret_page(request: Request):
+    """加密记事本"""
+    return templates.TemplateResponse("secret.html", {"request": request})
 
 
 @app.on_event("startup")

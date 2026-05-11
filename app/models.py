@@ -179,6 +179,17 @@ class ApiHistory(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class SecretNote(Base):
+    """加密记事本"""
+    __tablename__ = "secret_notes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(100), default="default", comment="标题标识")
+    content = Column(Text, default="", comment="AES-256-GCM 加密后的内容(base64)")
+    nonce = Column(Text, default="", comment="GCM nonce(base64)")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class ChatSession(Base):
     """AI 对话会话"""
     __tablename__ = "chat_sessions"
