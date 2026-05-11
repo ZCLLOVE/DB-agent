@@ -579,24 +579,31 @@ def _update_api_collection(name: str, new_name: Optional[str] = None,
 # ==================== 环境变量工具 ====================
 
 def _list_api_environments() -> str:
-    """列出所有环境变量配置"""
-    from app.models import ApiEnvironment, LocalSession
+    """列出所有环境配置"""
+    from app.models import ApiEnvironment, GlobalVariable, LocalSession
     session = LocalSession()
     try:
         envs = session.query(ApiEnvironment).all()
-        if not envs:
-            return "当前没有任何环境变量配置。"
+        gvars = session.query(GlobalVariable).all()
 
-        lines = ["环境变量列表:"]
-        for env in envs:
-            variables = json.loads(env.variables or "{}")
-            active_mark = " [当前激活]" if env.is_active else ""
-            lines.append(f"\n🌍 {env.name}{active_mark}")
-            if variables:
-                for k, v in variables.items():
-                    lines.append(f"  {k} = {v}")
-            else:
-                lines.append("  (无变量)")
+        lines = []
+        # 全局变量
+        if gvars:
+            lines.append("全局环境变量:")
+            for gv in gvars:
+                lines.append(f"  {gv.var_key} = {gv.var_value}")
+        else:
+            lines.append("全局环境变量: (无)")
+
+        # 环境列表
+        if envs:
+            lines.append("\n环境列表:")
+            for env in envs:
+                active_mark = " [当前激活]" if env.is_active else ""
+                lines.append(f"  {env.name}{active_mark}  base_url={env.base_url or '未配置'}")
+        else:
+            lines.append("\n环境列表: (无)")
+
         return "\n".join(lines)
     except Exception as e:
         return f"查询失败: {str(e)}"
@@ -604,9 +611,10 @@ def _list_api_environments() -> str:
         session.close()
 
 
-def _create_api_environment(name: str, variables: Optional[dict] = None) -> str:
-    """创建新的环境变量配置"""
-    from app.models import ApiEnvironment, LocalSession
+def _create_api_environment(name: str, variables: Optional[dict] = None,
+                            base_url: Optional[str] = None) -> str:
+    """创建新的环境配置"""
+    from app.models import ApiEnvironment, GlobalVariable, LocalSession
     session = LocalSession()
     try:
         existing = session.query(ApiEnvironment).filter(
@@ -617,12 +625,25 @@ def _create_api_environment(name: str, variables: Optional[dict] = None) -> str:
 
         env = ApiEnvironment(
             name=name,
-            variables=json.dumps(variables or {}, ensure_ascii=False),
+            base_url=base_url or "",
         )
         session.add(env)
+
+        # 如果传入了变量，存入全局变量表
+        if variables:
+            for key, value in variables.items():
+                if key.strip():
+                    existing_gv = session.query(GlobalVariable).filter(
+                        GlobalVariable.var_key == key.strip()
+                    ).first()
+                    if existing_gv:
+                        existing_gv.var_value = str(value)
+                    else:
+                        session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
+
         session.commit()
         var_count = len(variables) if variables else 0
-        return f"已创建环境 '{name}'，包含 {var_count} 个变量"
+        return f"已创建环境 '{name}'，base_url={base_url or '未配置'}" + (f"，已将 {var_count} 个变量存入全局变量" if var_count else "")
     except Exception as e:
         session.rollback()
         return f"创建失败: {str(e)}"
@@ -632,9 +653,10 @@ def _create_api_environment(name: str, variables: Optional[dict] = None) -> str:
 
 def _update_api_environment(name: str, new_name: Optional[str] = None,
                             variables: Optional[dict] = None,
-                            merge_variables: bool = False) -> str:
-    """更新环境变量配置。merge_variables=True 时合并变量而非替换"""
-    from app.models import ApiEnvironment, LocalSession
+                            merge_variables: bool = False,
+                            base_url: Optional[str] = None) -> str:
+    """更新环境配置。variables 会写入全局变量表，merge_variables=True 时合并而非替换"""
+    from app.models import ApiEnvironment, GlobalVariable, LocalSession
     session = LocalSession()
     try:
         env = session.query(ApiEnvironment).filter(
@@ -645,17 +667,32 @@ def _update_api_environment(name: str, new_name: Optional[str] = None,
 
         if new_name:
             env.name = new_name
+        if base_url is not None:
+            env.base_url = base_url
+
+        # 变量写入全局变量表
         if variables is not None:
-            if merge_variables:
-                existing = json.loads(env.variables or "{}")
-                existing.update(variables)
-                env.variables = json.dumps(existing, ensure_ascii=False)
-            else:
-                env.variables = json.dumps(variables, ensure_ascii=False)
+            for key, value in variables.items():
+                if not key.strip():
+                    continue
+                existing_gv = session.query(GlobalVariable).filter(
+                    GlobalVariable.var_key == key.strip()
+                ).first()
+                if merge_variables:
+                    # 合并模式：只添加/更新，不删除
+                    if existing_gv:
+                        existing_gv.var_value = str(value)
+                    else:
+                        session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
+                else:
+                    if existing_gv:
+                        existing_gv.var_value = str(value)
+                    else:
+                        session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
 
         session.commit()
-        final_vars = json.loads(env.variables or "{}")
-        return f"已更新环境 '{env.name}'，当前有 {len(final_vars)} 个变量"
+        gvars = session.query(GlobalVariable).all()
+        return f"已更新环境 '{env.name}'，全局变量共 {len(gvars)} 个"
     except Exception as e:
         session.rollback()
         return f"更新失败: {str(e)}"

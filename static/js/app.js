@@ -576,6 +576,10 @@ function rebindDataActionBar(tabId) {
     const resultWrapper = document.getElementById(`sql-result-${tabId}`);
     if (!tab || !info || !resultWrapper) return;
 
+    // 视图按钮（不依赖 selectAll/askAi，独立绑定）
+    const viewBtn = info.querySelector(`#data-view-${tabId}`);
+    if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(tabId);
+
     const selectAllCb = info.querySelector(`#data-select-all-${tabId}`);
     const askAiBtn = info.querySelector(`#data-ask-ai-${tabId}`);
     if (!selectAllCb || !askAiBtn) return;
@@ -597,9 +601,6 @@ function rebindDataActionBar(tabId) {
         });
         sendHistoryToAi(selectedData, { table: tab._tableData?.tableName || '', type: 'data' });
     };
-    // 重新绑定视图按钮
-    const viewBtn = info.querySelector(`#data-view-${tabId}`);
-    if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(tabId);
 }
 
 // ==================== Tab 管理 ====================
@@ -747,6 +748,8 @@ function renderTabContent() {
                 while (result.firstChild) {
                     t._savedResultFragment.appendChild(result.firstChild);
                 }
+                // 保存列可见性上下文（wrapper 元素会被重建，属性会丢失）
+                t._savedColVisCtx = result._colVisCtx;
             }
             const info = document.getElementById(`sql-result-info-${t.id}`);
             if (info) t._savedResultInfo = info.innerHTML;
@@ -768,6 +771,8 @@ function renderTabContent() {
                 if (result) {
                     result.innerHTML = '';
                     result.appendChild(tab._savedResultFragment);
+                    // 恢复列可见性上下文（wrapper 是新重建的）
+                    if (tab._savedColVisCtx) result._colVisCtx = tab._savedColVisCtx;
                 }
                 const info = document.getElementById(`sql-result-info-${tab.id}`);
                 if (info && tab._savedResultInfo) info.innerHTML = tab._savedResultInfo;

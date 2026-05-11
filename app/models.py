@@ -162,6 +162,16 @@ class ApiEnvironment(Base):
         }
 
 
+class GlobalVariable(Base):
+    """全局环境变量"""
+    __tablename__ = "global_variables"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    var_key = Column(String(200), nullable=False, unique=True, comment="变量名")
+    var_value = Column(Text, default="", comment="变量值")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class ApiHistory(Base):
     """接口调用历史"""
     __tablename__ = "api_history"
@@ -234,6 +244,8 @@ def init_local_db():
     # 增量迁移：为旧表添加新列
     _migrate_history_table()
     _migrate_env_base_url()
+    # 迁移：将已激活环境的变量迁移到全局变量表
+    _migrate_env_vars_to_global()
 
 
 def _migrate_history_table():
@@ -279,6 +291,34 @@ def _migrate_env_base_url():
                 except Exception:
                     pass
         session.commit()
+    finally:
+        session.close()
+
+
+def _migrate_env_vars_to_global():
+    """将已激活环境的变量迁移到全局变量表（仅执行一次）"""
+    import json as _json
+    session = LocalSession()
+    try:
+        # 如果全局变量表已有数据则跳过
+        if session.query(GlobalVariable).first():
+            return
+        # 取激活环境的变量
+        env = session.query(ApiEnvironment).filter(
+            ApiEnvironment.is_active == True
+        ).first()
+        if not env:
+            return
+        try:
+            variables = _json.loads(env.variables or "{}")
+        except Exception:
+            return
+        for key, value in variables.items():
+            if key.strip():
+                session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
+        session.commit()
+    except Exception:
+        session.rollback()
     finally:
         session.close()
 

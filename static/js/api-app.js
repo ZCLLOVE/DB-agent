@@ -8,6 +8,7 @@ const state = {
     collections: [],
     allRequests: [],
     environments: [],
+    globalVars: {},
     // 多 Tab
     tabs: [],
     activeTabId: null,
@@ -255,6 +256,7 @@ async function loadInitialData() {
         loadCollections(),
         loadHistory(),
         loadEnvironments(),
+        loadGlobalVariables(),
         loadProviders(),
     ]);
 }
@@ -327,6 +329,11 @@ function bindEvents() {
     };
     $('#btn-save-env').onclick = saveEnv;
     $('#btn-cancel-env').onclick = resetEnvForm;
+
+    // 全局变量
+    $('#btn-global-vars').onclick = openGlobalVarsModal;
+    $('#btn-save-global-vars').onclick = saveGlobalVariables;
+    $('#btn-cancel-global-vars').onclick = () => closeModal('modal-global-vars');
 
     // 设置
     $('#btn-settings').onclick = () => { resetProviderForm(); openModal('modal-settings'); };
@@ -919,7 +926,7 @@ async function loadEnvironments() {
 
 function renderEnvSelect(envs) {
     const sel = $('#api-env-select');
-    sel.innerHTML = '<option value="">无环境变量</option>';
+    sel.innerHTML = '<option value="">无环境</option>';
     envs.forEach(env => {
         const opt = document.createElement('option');
         opt.value = env.id;
@@ -935,10 +942,9 @@ function openEnvModal() {
         list.innerHTML = '';
         if (envs.length === 0) list.innerHTML = '<div class="text-muted text-xs text-center py-2">暂无环境</div>';
         envs.forEach(env => {
-            const vars = Object.entries(env.variables || {}).map(([k, v]) => `${k}=${v}`).join(', ');
             const div = document.createElement('div');
             div.className = 'flex items-center justify-between bg-bg rounded px-3 py-2 border border-border';
-            div.innerHTML = `<div><div class="text-sm font-medium ${env.is_active ? 'text-primary' : ''}">${escapeHtml(env.name)} ${env.is_active ? '<span class="text-[10px] bg-primary/20 text-primary px-1.5 rounded">激活</span>' : ''}</div><div class="text-xs text-muted mt-0.5 truncate max-w-[300px]">${escapeHtml(env.base_url || '未配置 Base URL')}${vars ? ' | ' + escapeHtml(vars) : ''}</div></div><div class="flex gap-1">${!env.is_active ? `<button onclick="activateEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-accent-light text-muted">使用</button>` : ''}<button onclick="editEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-muted text-muted">编辑</button><button onclick="deleteEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-red-500 hover:text-red-400 text-muted">删除</button></div>`;
+            div.innerHTML = `<div><div class="text-sm font-medium ${env.is_active ? 'text-primary' : ''}">${escapeHtml(env.name)} ${env.is_active ? '<span class="text-[10px] bg-primary/20 text-primary px-1.5 rounded">激活</span>' : ''}</div><div class="text-xs text-muted mt-0.5 truncate max-w-[300px]">${escapeHtml(env.base_url || '未配置 Base URL')}</div></div><div class="flex gap-1">${!env.is_active ? `<button onclick="activateEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-accent-light text-muted">使用</button>` : ''}<button onclick="editEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-muted text-muted">编辑</button><button onclick="deleteEnv(${env.id})" class="text-xs px-2 py-1 rounded border border-border hover:border-red-500 hover:text-red-400 text-muted">删除</button></div>`;
             list.appendChild(div);
         });
         resetEnvForm();
@@ -946,7 +952,49 @@ function openEnvModal() {
     });
 }
 
-function renderEnvKvEditor(container, data) {
+async function saveEnv() {
+    const editId = $('#env-edit-id').value;
+    const name = $('#env-name').value.trim();
+    const base_url = $('#env-base-url').value.trim();
+    if (!name) { alert('请填写环境名称'); return; }
+    try {
+        if (editId) await api('PUT', `/api/http/environments/${editId}`, { name, base_url });
+        else await api('POST', '/api/http/environments', { name, base_url });
+        resetEnvForm(); await loadEnvironments(); openEnvModal();
+    } catch (e) { alert('保存失败: ' + e.message); }
+}
+
+async function editEnv(id) {
+    const envs = await api('GET', '/api/http/environments');
+    const env = envs.find(e => e.id === id);
+    if (!env) return;
+    $('#env-edit-id').value = env.id;
+    $('#env-name').value = env.name;
+    $('#env-base-url').value = env.base_url || '';
+    $('#env-form-title').textContent = '编辑环境'; $('#btn-cancel-env').classList.remove('hidden');
+}
+
+async function activateEnv(id) { await api('POST', `/api/http/environments/${id}/activate`); await loadEnvironments(); openEnvModal(); }
+async function deleteEnv(id) { if (!confirm('删除此环境？')) return; await api('DELETE', `/api/http/environments/${id}`); await loadEnvironments(); openEnvModal(); }
+function resetEnvForm() {
+    $('#env-edit-id').value = ''; $('#env-name').value = ''; $('#env-base-url').value = '';
+    $('#env-form-title').textContent = '新建环境'; $('#btn-cancel-env').classList.add('hidden');
+}
+
+// ==================== 全局变量管理 ====================
+async function loadGlobalVariables() {
+    try {
+        const vars = await api('GET', '/api/http/global-variables');
+        state.globalVars = vars;
+    } catch (e) { console.error('加载全局变量失败:', e); }
+}
+
+function openGlobalVarsModal() {
+    renderGlobalVarsEditor($('#global-vars-container'), state.globalVars);
+    openModal('modal-global-vars');
+}
+
+function renderGlobalVarsEditor(container, data) {
     container.innerHTML = '';
     const entries = Object.keys(data || {}).length > 0
         ? Object.entries(data).map(([k, v]) => ({ key: k, value: v }))
@@ -959,6 +1007,7 @@ function renderEnvKvEditor(container, data) {
             <input class="kv-value" value="${escapeHtml(String(entry.value))}" placeholder="Value">
             <button class="api-kv-remove">&times;</button>
         `;
+        _bindValueTrim(row.querySelector('.kv-value'));
         row.querySelector('.api-kv-remove').onclick = () => row.remove();
         container.appendChild(row);
     });
@@ -969,53 +1018,32 @@ function renderEnvKvEditor(container, data) {
         const row = document.createElement('div');
         row.className = 'api-kv-row';
         row.innerHTML = `<input class="kv-key" placeholder="Key"><input class="kv-value" placeholder="Value"><button class="api-kv-remove">&times;</button>`;
+        _bindValueTrim(row.querySelector('.kv-value'));
         row.querySelector('.api-kv-remove').onclick = () => row.remove();
         container.insertBefore(row, addBtn);
     };
     container.appendChild(addBtn);
 }
 
-function collectEnvKvVars() {
+function _bindValueTrim(input) {
+    if (!input) return;
+    input.addEventListener('paste', () => setTimeout(() => { input.value = input.value.trim(); }, 0));
+    input.addEventListener('blur', () => { input.value = input.value.trim(); });
+}
+
+async function saveGlobalVariables() {
     const variables = {};
-    const container = $('#env-vars-container');
+    const container = $('#global-vars-container');
     container.querySelectorAll('.api-kv-row').forEach(row => {
         const key = row.querySelector('.kv-key')?.value?.trim();
-        const val = row.querySelector('.kv-value')?.value ?? '';
+        const val = row.querySelector('.kv-value')?.value?.trim() ?? '';
         if (key) variables[key] = val;
     });
-    return variables;
-}
-
-async function saveEnv() {
-    const editId = $('#env-edit-id').value;
-    const name = $('#env-name').value.trim();
-    const base_url = $('#env-base-url').value.trim();
-    const variables = collectEnvKvVars();
-    if (!name) { alert('请填写环境名称'); return; }
     try {
-        if (editId) await api('PUT', `/api/http/environments/${editId}`, { name, base_url, variables });
-        else await api('POST', '/api/http/environments', { name, base_url, variables });
-        resetEnvForm(); await loadEnvironments(); openEnvModal();
+        await api('PUT', '/api/http/global-variables', { variables });
+        state.globalVars = variables;
+        closeModal('modal-global-vars');
     } catch (e) { alert('保存失败: ' + e.message); }
-}
-
-async function editEnv(id) {
-    const envs = await api('GET', '/api/http/environments');
-    const env = envs.find(e => e.id === id);
-    if (!env) return;
-    $('#env-edit-id').value = env.id;
-    $('#env-name').value = env.name;
-    $('#env-base-url').value = env.base_url || '';
-    renderEnvKvEditor($('#env-vars-container'), env.variables || {});
-    $('#env-form-title').textContent = '编辑环境'; $('#btn-cancel-env').classList.remove('hidden');
-}
-
-async function activateEnv(id) { await api('POST', `/api/http/environments/${id}/activate`); await loadEnvironments(); openEnvModal(); }
-async function deleteEnv(id) { if (!confirm('删除此环境？')) return; await api('DELETE', `/api/http/environments/${id}`); await loadEnvironments(); openEnvModal(); }
-function resetEnvForm() {
-    $('#env-edit-id').value = ''; $('#env-name').value = ''; $('#env-base-url').value = '';
-    renderEnvKvEditor($('#env-vars-container'), {});
-    $('#env-form-title').textContent = '新建环境'; $('#btn-cancel-env').classList.add('hidden');
 }
 
 // ==================== AI 提供商管理 ====================

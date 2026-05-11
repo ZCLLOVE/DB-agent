@@ -10,19 +10,15 @@ from typing import Optional
 
 import httpx
 
-from app.models import ApiEnvironment, ApiHistory, LocalSession
+from app.models import ApiEnvironment, ApiHistory, GlobalVariable, LocalSession
 
 
 def _get_active_env_vars() -> dict:
-    """获取当前激活环境的变量"""
+    """获取全局变量"""
     session = LocalSession()
     try:
-        env = session.query(ApiEnvironment).filter(
-            ApiEnvironment.is_active == True
-        ).first()
-        if env:
-            return json.loads(env.variables or "{}")
-        return {}
+        rows = session.query(GlobalVariable).all()
+        return {row.var_key: row.var_value for row in rows}
     finally:
         session.close()
 

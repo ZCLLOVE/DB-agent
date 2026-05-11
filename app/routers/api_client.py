@@ -10,7 +10,7 @@ from typing import Optional
 
 from app.models import (
     get_local_session, ApiCollection, ApiRequest,
-    ApiEnvironment, ApiHistory,
+    ApiEnvironment, ApiHistory, GlobalVariable,
 )
 from app.services.http_service import send_request, generate_curl
 
@@ -222,6 +222,29 @@ def list_history(session: Session = Depends(get_local_session)):
 def clear_history(session: Session = Depends(get_local_session)):
     """清空历史"""
     session.query(ApiHistory).delete()
+    session.commit()
+    return {"ok": True}
+
+
+# ==================== 全局变量 ====================
+
+@router.get("/global-variables")
+def list_global_variables(session: Session = Depends(get_local_session)):
+    """获取所有全局变量"""
+    rows = session.query(GlobalVariable).all()
+    return {row.var_key: row.var_value for row in rows}
+
+
+@router.put("/global-variables")
+def update_global_variables(body: dict, session: Session = Depends(get_local_session)):
+    """批量更新全局变量（整体替换）"""
+    variables = body.get("variables", {})
+    # 先删除旧数据
+    session.query(GlobalVariable).delete()
+    # 插入新数据
+    for key, value in variables.items():
+        if key.strip():
+            session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
     session.commit()
     return {"ok": True}
 
