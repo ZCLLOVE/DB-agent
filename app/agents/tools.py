@@ -515,6 +515,40 @@ def _delete_api_collection(name: str) -> str:
         session.close()
 
 
+def _create_api_collection(name: str, parent_name: Optional[str] = None) -> str:
+    """创建新的接口集合"""
+    from app.models import ApiCollection, LocalSession
+    session = LocalSession()
+    try:
+        existing = session.query(ApiCollection).filter(
+            ApiCollection.name == name
+        ).first()
+        if existing:
+            return f"集合 '{name}' 已存在，如需修改请使用 update_api_collection"
+
+        parent_id = None
+        if parent_name:
+            parent = session.query(ApiCollection).filter(
+                ApiCollection.name.contains(parent_name)
+            ).first()
+            if not parent:
+                return f"未找到名称包含 '{parent_name}' 的父集合"
+            parent_id = parent.id
+
+        coll = ApiCollection(name=name, parent_id=parent_id)
+        session.add(coll)
+        session.commit()
+
+        if parent_id:
+            return f"已创建集合 '{name}'（父集合: {parent.name}）"
+        return f"已创建顶级集合 '{name}'"
+    except Exception as e:
+        session.rollback()
+        return f"创建失败: {str(e)}"
+    finally:
+        session.close()
+
+
 def _update_api_collection(name: str, new_name: Optional[str] = None,
                            parent_name: Optional[str] = None,
                            move_to_top: bool = False) -> str:
@@ -580,30 +614,18 @@ def _update_api_collection(name: str, new_name: Optional[str] = None,
 
 def _list_api_environments() -> str:
     """列出所有环境配置"""
-    from app.models import ApiEnvironment, GlobalVariable, LocalSession
+    from app.models import ApiEnvironment, LocalSession
     session = LocalSession()
     try:
         envs = session.query(ApiEnvironment).all()
-        gvars = session.query(GlobalVariable).all()
 
-        lines = []
-        # 全局变量
-        if gvars:
-            lines.append("全局环境变量:")
-            for gv in gvars:
-                lines.append(f"  {gv.var_key} = {gv.var_value}")
-        else:
-            lines.append("全局环境变量: (无)")
+        if not envs:
+            return "当前没有任何环境配置。"
 
-        # 环境列表
-        if envs:
-            lines.append("\n环境列表:")
-            for env in envs:
-                active_mark = " [当前激活]" if env.is_active else ""
-                lines.append(f"  {env.name}{active_mark}  base_url={env.base_url or '未配置'}")
-        else:
-            lines.append("\n环境列表: (无)")
-
+        lines = ["环境列表:"]
+        for env in envs:
+            active_mark = " [当前激活]" if env.is_active else ""
+            lines.append(f"  {env.name}{active_mark}  base_url={env.base_url or '未配置'}")
         return "\n".join(lines)
     except Exception as e:
         return f"查询失败: {str(e)}"
@@ -611,10 +633,9 @@ def _list_api_environments() -> str:
         session.close()
 
 
-def _create_api_environment(name: str, variables: Optional[dict] = None,
-                            base_url: Optional[str] = None) -> str:
+def _create_api_environment(name: str, base_url: Optional[str] = None) -> str:
     """创建新的环境配置"""
-    from app.models import ApiEnvironment, GlobalVariable, LocalSession
+    from app.models import ApiEnvironment, LocalSession
     session = LocalSession()
     try:
         existing = session.query(ApiEnvironment).filter(
@@ -628,22 +649,8 @@ def _create_api_environment(name: str, variables: Optional[dict] = None,
             base_url=base_url or "",
         )
         session.add(env)
-
-        # 如果传入了变量，存入全局变量表
-        if variables:
-            for key, value in variables.items():
-                if key.strip():
-                    existing_gv = session.query(GlobalVariable).filter(
-                        GlobalVariable.var_key == key.strip()
-                    ).first()
-                    if existing_gv:
-                        existing_gv.var_value = str(value)
-                    else:
-                        session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
-
         session.commit()
-        var_count = len(variables) if variables else 0
-        return f"已创建环境 '{name}'，base_url={base_url or '未配置'}" + (f"，已将 {var_count} 个变量存入全局变量" if var_count else "")
+        return f"已创建环境 '{name}'，base_url={base_url or '未配置'}"
     except Exception as e:
         session.rollback()
         return f"创建失败: {str(e)}"
@@ -652,11 +659,9 @@ def _create_api_environment(name: str, variables: Optional[dict] = None,
 
 
 def _update_api_environment(name: str, new_name: Optional[str] = None,
-                            variables: Optional[dict] = None,
-                            merge_variables: bool = False,
                             base_url: Optional[str] = None) -> str:
-    """更新环境配置。variables 会写入全局变量表，merge_variables=True 时合并而非替换"""
-    from app.models import ApiEnvironment, GlobalVariable, LocalSession
+    """更新环境配置"""
+    from app.models import ApiEnvironment, LocalSession
     session = LocalSession()
     try:
         env = session.query(ApiEnvironment).filter(
@@ -670,29 +675,8 @@ def _update_api_environment(name: str, new_name: Optional[str] = None,
         if base_url is not None:
             env.base_url = base_url
 
-        # 变量写入全局变量表
-        if variables is not None:
-            for key, value in variables.items():
-                if not key.strip():
-                    continue
-                existing_gv = session.query(GlobalVariable).filter(
-                    GlobalVariable.var_key == key.strip()
-                ).first()
-                if merge_variables:
-                    # 合并模式：只添加/更新，不删除
-                    if existing_gv:
-                        existing_gv.var_value = str(value)
-                    else:
-                        session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
-                else:
-                    if existing_gv:
-                        existing_gv.var_value = str(value)
-                    else:
-                        session.add(GlobalVariable(var_key=key.strip(), var_value=str(value)))
-
         session.commit()
-        gvars = session.query(GlobalVariable).all()
-        return f"已更新环境 '{env.name}'，全局变量共 {len(gvars)} 个"
+        return f"已更新环境 '{env.name}'，base_url={env.base_url or '未配置'}"
     except Exception as e:
         session.rollback()
         return f"更新失败: {str(e)}"
@@ -913,6 +897,27 @@ HTTP_TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "create_api_collection",
+            "description": "创建新的接口集合。可指定父集合实现层级管理。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "集合名称，如 '用户管理'、'供应链管理'",
+                    },
+                    "parent_name": {
+                        "type": "string",
+                        "description": "父集合名称（可选，模糊匹配）。不填则为顶级集合。",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_api_collection",
             "description": "修改集合名称或将集合移动到其他集合下面/移到顶级。支持集合的层级管理。",
             "parameters": {
@@ -972,17 +977,17 @@ HTTP_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_api_environment",
-            "description": "创建新的环境变量配置，可指定变量键值对",
+            "description": "创建新的环境配置，指定环境名称和 Base URL",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "环境名称，如 '开发环境'、'测试环境'",
+                        "description": "环境名称，如 '本地-供应链管理'、'开发环境'",
                     },
-                    "variables": {
-                        "type": "object",
-                        "description": "变量键值对，如 {\"base_url\": \"https://api.dev.com\", \"token\": \"xxx\"}",
+                    "base_url": {
+                        "type": "string",
+                        "description": "环境的基础 URL，如 'http://localhost:8080'、'https://api.dev.com'",
                     },
                 },
                 "required": ["name"],
@@ -993,7 +998,7 @@ HTTP_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "update_api_environment",
-            "description": "更新环境变量配置（改名、修改变量）。merge_variables=True 时合并而非替换",
+            "description": "更新环境配置（修改名称或 Base URL）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1005,13 +1010,9 @@ HTTP_TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": "新名称（可选）",
                     },
-                    "variables": {
-                        "type": "object",
-                        "description": "新的变量键值对",
-                    },
-                    "merge_variables": {
-                        "type": "boolean",
-                        "description": "true=合并到现有变量，false=完全替换（默认 false）",
+                    "base_url": {
+                        "type": "string",
+                        "description": "新的 Base URL（可选）",
                     },
                 },
                 "required": ["name"],
@@ -1045,6 +1046,7 @@ HTTP_TOOL_FUNCTIONS = {
     "get_api_request": _get_api_request,
     "update_api_request": _update_api_request,
     "delete_api_request": _delete_api_request,
+    "create_api_collection": _create_api_collection,
     "delete_api_collection": _delete_api_collection,
     "update_api_collection": _update_api_collection,
     "list_api_environments": _list_api_environments,

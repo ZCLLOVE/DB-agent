@@ -487,10 +487,52 @@ async function showTableColumnsPopup(tableName) {
     }
 }
 
+function renderTableResultInfo(tabId, data) {
+    const infoEl = document.querySelector(`#tab-panel-${tabId} .sql-result-info`);
+    if (!infoEl) return;
+    const tableName = data.tableName || '';
+    const pkInfo = (data.primary_keys && data.primary_keys.length > 0)
+        ? '' : '<span class="text-yellow-500 ml-2">(无主键，不可编辑)</span>';
+    const tableLabel = tableName ? `表: ${escapeHtml(tableName)} | ` : '';
+    infoEl.innerHTML = `
+        <span style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">${tableLabel}${data.rows.length} 行${pkInfo}</span>
+        <span class="flex items-center gap-2">
+            <label class="flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" class="accent-red-500" id="data-select-all-${tabId}"> <span class="text-xs">全选</span>
+            </label>
+            <button class="bg-primary hover:bg-red-500 text-white text-xs px-3 py-0.5 rounded" id="data-ask-ai-${tabId}">问 AI</button>
+            <button class="text-xs px-3 py-0.5 rounded border border-border hover:border-accent-light hover:text-accent-light" id="data-view-${tabId}">视图</button>
+        </span>
+    `;
+    const resultWrapper = document.getElementById(`sql-result-${tabId}`);
+    infoEl.querySelector(`#data-select-all-${tabId}`).onchange = (e) => {
+        resultWrapper.querySelectorAll('.data-row-cb').forEach(cb => cb.checked = e.target.checked);
+    };
+    infoEl.querySelector(`#data-ask-ai-${tabId}`).onclick = () => {
+        const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
+        if (checked.length === 0) { alert('请先勾选数据行'); return; }
+        const selectedData = Array.from(checked).map(cb => {
+            const idx = parseInt(cb.dataset.rowIdx);
+            const row = data.rows[idx];
+            const obj = {};
+            data.columns.forEach((col, i) => { obj[col] = row[i]; });
+            return JSON.stringify(obj);
+        });
+        sendHistoryToAi(selectedData, { table: tableName, type: 'data' });
+    };
+    const viewBtn = infoEl.querySelector(`#data-view-${tabId}`);
+    if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(tabId);
+}
+
 async function showTableData(tableName) {
+    const sql = `SELECT * FROM ${tableName} LIMIT 200;`;
     const tab = getActiveSqlTab();
     if (!tab) {
-        createSqlTab();
+        createSqlTab(sql);
+    } else {
+        if (tab.editor) {
+            tab.editor.setValue(sql);
+        }
     }
     await new Promise(r => setTimeout(r, 50));
     const activeTab = getActiveSqlTab();
@@ -498,42 +540,11 @@ async function showTableData(tableName) {
 
     try {
         const data = await api('GET', `/api/connections/${state.currentConnId}/tables/${encodeURIComponent(tableName)}/data`);
-        data.tableName = tableName;  // 标记来源表（用于可编辑模式）
-        activeTab._tableData = { columns: data.columns, rows: data.rows, tableName: tableName }; // 保存供问AI用
+        data.tableName = tableName;
+        activeTab._tableData = { columns: data.columns, rows: data.rows, tableName: tableName };
+        activeTab._tableAllColumns = [...data.columns];  // 保存完整表字段，供视图弹窗使用
         renderResultTable(activeTab.id, data);
-        const infoEl = document.querySelector(`#tab-panel-${activeTab.id} .sql-result-info`);
-        const pkInfo = (data.primary_keys && data.primary_keys.length > 0)
-            ? '' : '<span class="text-yellow-500 ml-2">(无主键，不可编辑)</span>';
-        if (infoEl) {
-            infoEl.innerHTML = `
-                <span style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">表: ${escapeHtml(tableName)} | ${data.rows.length} 行${pkInfo}</span>
-                <span class="flex items-center gap-2">
-                    <label class="flex items-center gap-1 cursor-pointer">
-                        <input type="checkbox" class="accent-red-500" id="data-select-all-${activeTab.id}"> <span class="text-xs">全选</span>
-                    </label>
-                    <button class="bg-primary hover:bg-red-500 text-white text-xs px-3 py-0.5 rounded" id="data-ask-ai-${activeTab.id}">问 AI</button>
-                    <button class="text-xs px-3 py-0.5 rounded border border-border hover:border-accent-light hover:text-accent-light" id="data-view-${activeTab.id}">视图</button>
-                </span>
-            `;
-            const resultWrapper = document.getElementById(`sql-result-${activeTab.id}`);
-            infoEl.querySelector(`#data-select-all-${activeTab.id}`).onchange = (e) => {
-                resultWrapper.querySelectorAll('.data-row-cb').forEach(cb => cb.checked = e.target.checked);
-            };
-            infoEl.querySelector(`#data-ask-ai-${activeTab.id}`).onclick = () => {
-                const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
-                if (checked.length === 0) { alert('请先勾选数据行'); return; }
-                const selectedData = Array.from(checked).map(cb => {
-                    const idx = parseInt(cb.dataset.rowIdx);
-                    const row = data.rows[idx];
-                    const obj = {};
-                    data.columns.forEach((col, i) => { obj[col] = row[i]; });
-                    return JSON.stringify(obj);
-                });
-                sendHistoryToAi(selectedData, { table: tableName, type: 'data' });
-            };
-            const viewBtn = infoEl.querySelector(`#data-view-${activeTab.id}`);
-            if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(activeTab.id);
-        }
+        renderTableResultInfo(activeTab.id, data);
     } catch (e) {
         alert('加载数据失败: ' + e.message);
     }
@@ -549,15 +560,19 @@ async function showTableDdl(tableName) {
     }
 }
 
-function insertSelectSql(tableName) {
+async function insertSelectSql(tableName) {
+    const sql = `SELECT * FROM ${tableName};`;
     const tab = getActiveSqlTab();
     if (!tab) {
-        createSqlTab(`SELECT * FROM ${tableName};`);
+        createSqlTab(sql);
     } else {
         if (tab.editor) {
-            tab.editor.setValue(`SELECT * FROM ${tableName};`);
+            tab.editor.setValue(sql);
         }
     }
+    await new Promise(r => setTimeout(r, 50));
+    const activeTab = getActiveSqlTab();
+    if (activeTab) executeSql(activeTab.id);
 }
 
 async function showTableRowCount(tableName) {
@@ -959,7 +974,13 @@ function showColumnVisibilityPopup(tabId) {
     if (!ctx) return;
 
     const { colVisible, columns, commentMap, applyColVisibility } = ctx;
-    const tempVisible = [...colVisible];
+    const tab = state.tabs.find(t => t.id === tabId);
+
+    // 始终使用完整表字段（不会越选越少）
+    const allColumns = (tab && tab._tableAllColumns) ? tab._tableAllColumns : columns;
+    // 当前结果中可见的列集合
+    const visibleSet = new Set(columns.filter((_, i) => colVisible[i]));
+    const tempVisible = allColumns.map(col => visibleSet.has(col));
 
     const popup = document.createElement('div');
     popup.className = 'col-visibility-popup fixed inset-0 bg-black/60 z-50 flex items-center justify-center';
@@ -984,9 +1005,9 @@ function showColumnVisibilityPopup(tabId) {
     popup.appendChild(box);
     document.body.appendChild(popup);
 
-    // 填充列复选框
+    // 填充列复选框（始终展示完整表结构）
     const list = box.querySelector('#col-vis-list');
-    columns.forEach((col, i) => {
+    allColumns.forEach((col, i) => {
         const comment = commentMap[col] || '';
         const label = document.createElement('label');
         label.className = 'flex items-center gap-2 text-sm cursor-pointer py-1';
@@ -1017,16 +1038,35 @@ function showColumnVisibilityPopup(tabId) {
     box.querySelector('#col-vis-cancel').onclick = close;
     popup.onclick = (e) => { if (e.target === popup) close(); };
 
-    // 确认：更新闭包内的 colVisible 数组，然后 applyColVisibility
+    // 确认：更新列可见性 + 替换 SQL 中 SELECT 和 FROM 之间的部分
     box.querySelector('#col-vis-confirm').onclick = () => {
         if (tempVisible.every(v => !v)) {
             alert('至少需要勾选一列');
             return;
         }
+        // 映射回当前结果列的可见性
+        const newVisibleSet = new Set(allColumns.filter((_, i) => tempVisible[i]));
         for (let i = 0; i < columns.length; i++) {
-            colVisible[i] = tempVisible[i];
+            colVisible[i] = newVisibleSet.has(columns[i]);
         }
         applyColVisibility();
+
+        // 只替换 SQL 中 SELECT 和 FROM 之间的列部分，其余不动
+        if (tab && tab.editor) {
+            const selectedCols = allColumns.filter((_, i) => tempVisible[i]);
+            const allSelected = selectedCols.length === allColumns.length;
+            const colPart = allSelected ? '*' : selectedCols.join(',\n       ');
+            const currentSql = tab.editor.getValue();
+            const newSql = currentSql.replace(
+                /SELECT\s+[\s\S]*?(\sFROM\s)/i,
+                `SELECT ${colPart}$1`
+            );
+            tab.editor.setValue(newSql);
+        }
+        popup.remove();
+    };
+}
+        }
         popup.remove();
     };
 }
@@ -1078,14 +1118,18 @@ async function executeSql(tabId) {
 
 function renderSqlResult(tabId, result) {
     if (result.type === 'query') {
-        renderResultTable(tabId, {
+        const data = {
             columns: result.columns,
             rows: result.rows,
             column_meta: result.column_meta || [],
             primary_keys: result.primary_keys || [],
             tableName: result.tableName || null,
-        });
-        updateResultInfo(tabId, `${result.rowcount} 行`);
+        };
+        // 保存供问AI用
+        const tab = state.tabs.find(t => t.id === tabId);
+        if (tab) tab._tableData = { columns: data.columns, rows: data.rows, tableName: data.tableName };
+        renderResultTable(tabId, data);
+        renderTableResultInfo(tabId, data);
     } else {
         const wrapper = document.getElementById(`sql-result-${tabId}`);
         wrapper.innerHTML = `<div class="p-3 text-sm text-green-400">${escapeHtml(result.message)}</div>`;

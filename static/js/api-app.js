@@ -365,6 +365,19 @@ async function loadCollections() {
         ]);
         state.collections = colls;
         state.allRequests = reqs;
+        // 首次加载：默认所有集合收缩；后续刷新：收缩新增的集合
+        const existingIds = new Set(state.collapsedCollections);
+        if (existingIds.size === 0) {
+            // 首次加载
+            state.collapsedCollections = new Set(colls.map(c => c.id));
+        } else {
+            // 后续刷新：新出现的集合默认收缩
+            for (const c of colls) {
+                if (!existingIds.has(c.id) && !state.collapsedCollections.has(c.id)) {
+                    state.collapsedCollections.add(c.id);
+                }
+            }
+        }
         renderCollectionTree();
     } catch (e) { console.error('加载集合失败:', e); }
 }
