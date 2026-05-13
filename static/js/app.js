@@ -1066,10 +1066,6 @@ function showColumnVisibilityPopup(tabId) {
         popup.remove();
     };
 }
-        }
-        popup.remove();
-    };
-}
 
 // ==================== SQL 执行 ====================
 let pendingConfirmTabId = null;
