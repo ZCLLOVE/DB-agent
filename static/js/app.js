@@ -425,7 +425,7 @@ function showTableContextMenu(e, tableName) {
     menu.style.left = e.clientX + 'px';
     menu.style.top = e.clientY + 'px';
     menu.innerHTML = `
-        <div class="context-menu-item" data-action="columns">展开字段</div>
+        <div class="context-menu-item" data-action="columns">编辑字段</div>
         <div class="context-menu-item" data-action="data">查看数据（前200条）</div>
         <div class="context-menu-item" data-action="ddl">查看建表语句</div>
         <div class="context-menu-item" data-action="select">生成 SELECT *</div>
@@ -452,48 +452,199 @@ function showTableContextMenu(e, tableName) {
     }, 10);
 }
 
-// 右键"展开字段"：在侧边栏树节点内联展开
+// ---- 字段编辑弹窗（DBeaver 风格）----
+const _colEditor = {
+    tableName: '',
+    original: [],
+    dbType: '',
+    generatedSql: '',
+};
+
 async function showTableColumnsPopup(tableName) {
-    // 找到对应的树节点
-    const treeItem = document.querySelector(`#table-tree .tree-item[data-table="${CSS.escape(tableName)}"]`);
-    if (!treeItem) return;
+    if (!state.currentConnId) return;
+    const conn = state.connections.find(c => c.id === state.currentConnId);
+    _colEditor.dbType = (conn?.db_type || 'mysql').toLowerCase();
 
-    // 如果已展开，收起
-    const existing = treeItem.querySelector('.tree-children');
-    if (existing) {
-        existing.remove();
-        treeItem.classList.remove('active');
-        return;
-    }
-
-    treeItem.classList.add('active');
+    $('#column-editor-table-name').textContent = tableName;
+    $('#column-editor-grid').innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">加载中...</td></tr>';
+    $('#column-editor-sql-preview').textContent = '';
+    $('#btn-column-editor-execute').classList.add('hidden');
+    openModal('modal-column-editor');
 
     try {
         const data = await api('GET', `/api/connections/${state.currentConnId}/tables/${encodeURIComponent(tableName)}/columns`);
         const columns = data.columns || [];
-        const childDiv = document.createElement('div');
-        childDiv.className = 'tree-children';
-
-        columns.forEach(col => {
-            const colItem = document.createElement('div');
-            colItem.className = 'tree-item';
-            let badges = '';
-            if (col.primary_key) badges += '<span class="tree-column-badge badge-pk">PK</span>';
-            colItem.innerHTML = `
-                <span class="tree-icon" style="color:#5a8a7a">◇</span>
-                <span class="tree-label">${escapeHtml(col.name)}</span>
-                <span class="tree-column-type">${escapeHtml(col.type)}</span>
-                ${badges}
-            `;
-            colItem.title = `${col.name}: ${col.type}${col.primary_key ? ' (PK)' : ''}${col.comment ? ' -- ' + col.comment : ''}`;
-            childDiv.appendChild(colItem);
-        });
-
-        treeItem.appendChild(childDiv);
+        _colEditor.tableName = tableName;
+        _colEditor.original = JSON.parse(JSON.stringify(columns));
+        _colEditor.generatedSql = '';
+        renderColumnEditorGrid(columns);
     } catch (e) {
-        treeItem.classList.remove('active');
+        $('#column-editor-grid').innerHTML = `<tr><td colspan="6" class="text-center text-red-400 py-4">${escapeHtml(e.message)}</td></tr>`;
     }
 }
+
+function renderColumnEditorGrid(columns) {
+    const tbody = $('#column-editor-grid');
+    tbody.innerHTML = '';
+
+    columns.forEach((col, idx) => {
+        const tr = document.createElement('tr');
+        tr.className = 'column-editor-row';
+        tr.dataset.colIdx = idx;
+        tr.innerHTML = `
+            <td class="text-center"><input type="checkbox" class="accent-purple-500" ${col.primary_key ? 'checked' : ''} disabled title="主键"></td>
+            <td><input type="text" class="col-ed-name" value="${escapeHtml(col.name)}" data-orig="${escapeHtml(col.name)}"></td>
+            <td><input type="text" class="col-ed-type" value="${escapeHtml(col.type)}" data-orig="${escapeHtml(col.type)}"></td>
+            <td class="text-center"><input type="checkbox" class="col-ed-nullable accent-red-500" ${col.nullable ? 'checked' : ''} data-orig="${col.nullable}"></td>
+            <td><input type="text" class="col-ed-default" value="${escapeHtml(col.default || '')}" data-orig="${escapeHtml(col.default || '')}"></td>
+            <td><input type="text" class="col-ed-comment" value="${escapeHtml(col.comment || '')}" data-orig="${escapeHtml(col.comment || '')}"></td>
+            <td class="text-center"><button class="col-ed-del" title="删除字段">&times;</button></td>
+        `;
+        tr.querySelectorAll('input:not([disabled])').forEach(inp => {
+            inp.addEventListener('input', () => markColumnEditorRow(tr, idx));
+            inp.addEventListener('change', () => markColumnEditorRow(tr, idx));
+        });
+        tr.querySelector('.col-ed-del').onclick = () => {
+            tr.classList.toggle('column-deleted');
+            _colEditor.generatedSql = '';
+            $('#column-editor-sql-preview').textContent = '';
+            $('#btn-column-editor-execute').classList.add('hidden');
+        };
+        tbody.appendChild(tr);
+    });
+}
+
+function markColumnEditorRow(tr, idx) {
+    const orig = _colEditor.original[idx];
+    const cur = {
+        name: tr.querySelector('.col-ed-name').value.trim(),
+        type: tr.querySelector('.col-ed-type').value.trim(),
+        nullable: tr.querySelector('.col-ed-nullable').checked,
+        default: tr.querySelector('.col-ed-default').value,
+        comment: tr.querySelector('.col-ed-comment').value,
+    };
+    const changed = (
+        cur.name !== orig.name ||
+        cur.type !== orig.type ||
+        cur.nullable !== orig.nullable ||
+        cur.default !== (orig.default || '') ||
+        cur.comment !== (orig.comment || '')
+    );
+    tr.classList.toggle('column-modified', changed);
+    _colEditor.generatedSql = '';
+    $('#column-editor-sql-preview').textContent = '';
+    $('#btn-column-editor-execute').classList.add('hidden');
+}
+
+function generateAlterSql() {
+    const { tableName, original, dbType } = _colEditor;
+    const q = t => dbType === 'mysql' ? `\`${t}\`` : `"${t}"`;
+    const rows = document.querySelectorAll('#column-editor-grid .column-editor-row');
+    const changes = [];   // CHANGE/MODIFY 子句
+    const drops = [];     // DROP COLUMN 子句
+    const extras = [];    // PG 等其他语句
+
+    rows.forEach((tr, idx) => {
+        const orig = original[idx];
+
+        // 删除字段
+        if (tr.classList.contains('column-deleted')) {
+            if (dbType === 'sqlite') {
+                extras.push(`-- SQLite: ALTER TABLE 支持有限，请手动重建表`);
+            } else {
+                drops.push(`DROP COLUMN ${q(orig.name)}`);
+            }
+            return;
+        }
+
+        const cur = {
+            name: tr.querySelector('.col-ed-name').value.trim(),
+            type: tr.querySelector('.col-ed-type').value.trim(),
+            nullable: tr.querySelector('.col-ed-nullable').checked,
+            default: tr.querySelector('.col-ed-default').value.trim(),
+            comment: tr.querySelector('.col-ed-comment').value.trim(),
+        };
+
+        const nameChanged = cur.name !== orig.name;
+        const typeChanged = cur.type !== orig.type;
+        const nullableChanged = cur.nullable !== orig.nullable;
+        const defaultChanged = cur.default !== (orig.default || '');
+        const commentChanged = cur.comment !== (orig.comment || '');
+
+        if (!nameChanged && !typeChanged && !nullableChanged && !defaultChanged && !commentChanged) return;
+
+        if (dbType === 'mysql') {
+            let colDef = cur.type;
+            colDef += cur.nullable ? '' : ' NOT NULL';
+            if (cur.default !== '') {
+                colDef += ` DEFAULT ${cur.default}`;
+            } else if (cur.nullable) {
+                colDef += ' DEFAULT NULL';
+            }
+            colDef += ` COMMENT '${cur.comment.replace(/'/g, "''")}'`;
+            changes.push(`CHANGE COLUMN ${q(orig.name)} ${q(cur.name)} ${colDef}`);
+        } else if (dbType === 'postgresql') {
+            const alter = `ALTER TABLE ${q(tableName)}`;
+            if (typeChanged) extras.push(`${alter} ALTER COLUMN ${q(orig.name)} TYPE ${cur.type};`);
+            if (nullableChanged) extras.push(cur.nullable
+                ? `${alter} ALTER COLUMN ${q(orig.name)} DROP NOT NULL;`
+                : `${alter} ALTER COLUMN ${q(orig.name)} SET NOT NULL;`);
+            if (defaultChanged) extras.push(cur.default !== ''
+                ? `${alter} ALTER COLUMN ${q(orig.name)} SET DEFAULT ${cur.default};`
+                : `${alter} ALTER COLUMN ${q(orig.name)} DROP DEFAULT;`);
+            if (commentChanged) extras.push(`COMMENT ON COLUMN ${q(tableName)}.${q(orig.name)} IS '${cur.comment.replace(/'/g, "''")}';`);
+            if (nameChanged) extras.push(`${alter} RENAME COLUMN ${q(orig.name)} TO ${q(cur.name)};`);
+        } else {
+            extras.push(`-- SQLite: ALTER TABLE 支持有限，请手动重建表`);
+        }
+    });
+
+    const parts = [];
+    // MySQL: 同表合并为一条 ALTER TABLE ... , ... ;
+    if (changes.length > 0 || drops.length > 0) {
+        const clauses = [...changes, ...drops];
+        parts.push(`ALTER TABLE ${q(tableName)}\n  ${clauses.join(',\n  ')};`);
+    }
+    if (extras.length > 0) {
+        parts.push(extras.join('\n'));
+    }
+    return parts.join('\n');
+}
+
+// 生成 SQL 按钮
+$('#btn-column-editor-generate').onclick = () => {
+    const sql = generateAlterSql();
+    _colEditor.generatedSql = sql;
+    $('#column-editor-sql-preview').textContent = sql || '-- 无修改';
+    $('#btn-column-editor-execute').classList.toggle('hidden', !sql);
+};
+
+// 执行修改按钮
+$('#btn-column-editor-execute').onclick = () => {
+    const sql = _colEditor.generatedSql;
+    if (!sql) return;
+    closeModal('modal-column-editor');
+    pendingConfirmSql = sql;
+    pendingConfirmTabId = getActiveSqlTab()?.id;
+    if (!pendingConfirmTabId) {
+        createSqlTab();
+        pendingConfirmTabId = getActiveSqlTab()?.id;
+    }
+    $('#confirm-sql').textContent = sql;
+    pendingConfirmOnSuccess = () => showTableColumnsPopup(_colEditor.tableName);
+    openModal('modal-confirm');
+};
+
+// 复制 SQL 按钮
+$('#btn-column-editor-copy').onclick = () => {
+    const sql = _colEditor.generatedSql || generateAlterSql();
+    if (!sql) { alert('没有可复制的 SQL'); return; }
+    navigator.clipboard.writeText(sql).then(() => {
+        const btn = $('#btn-column-editor-copy');
+        btn.textContent = '已复制';
+        setTimeout(() => btn.textContent = '复制SQL', 1500);
+    });
+};
 
 function renderTableResultInfo(tabId, data) {
     const infoEl = document.querySelector(`#tab-panel-${tabId} .sql-result-info`);

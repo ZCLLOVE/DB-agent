@@ -253,4 +253,43 @@
         </div>
     </div>
 </div>
+
+<!-- 字段编辑弹窗（DBeaver风格） -->
+<div id="modal-column-editor" class="fixed inset-0 bg-black/60 hidden z-50 flex items-center justify-center">
+    <div class="bg-bg-light border border-border rounded-lg w-[860px] max-h-[85vh] flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b border-border">
+            <h3 class="text-sm font-medium">字段编辑 - <span id="column-editor-table-name"></span></h3>
+            <div class="flex items-center gap-2">
+                <button id="btn-column-editor-copy" class="text-xs text-muted hover:text-white border border-border rounded px-2 py-0.5 transition-colors">复制SQL</button>
+                <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+            </div>
+        </div>
+        <div class="p-4 overflow-auto flex-1">
+            <table class="data-table w-full" id="column-editor-table">
+                <thead>
+                    <tr>
+                        <th style="width:36px">PK</th>
+                        <th style="min-width:140px">列名</th>
+                        <th style="min-width:140px">类型</th>
+                        <th style="width:50px">可空</th>
+                        <th style="min-width:100px">默认值</th>
+                        <th style="min-width:160px">注释</th>
+                        <th style="width:36px"></th>
+                    </tr>
+                </thead>
+                <tbody id="column-editor-grid"></tbody>
+            </table>
+        </div>
+        <div class="border-t border-border">
+            <div class="flex items-center justify-between px-4 py-2">
+                <span class="text-xs text-muted">SQL 预览</span>
+                <div class="flex gap-2">
+                    <button id="btn-column-editor-generate" class="text-xs text-muted hover:text-white border border-border px-3 py-1 rounded transition-colors">生成 SQL</button>
+                    <button id="btn-column-editor-execute" class="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1 rounded hidden">执行修改</button>
+                </div>
+            </div>
+            <pre id="column-editor-sql-preview" class="bg-bg border-t border-border p-3 text-sm text-green-300 max-h-40 overflow-auto font-mono whitespace-pre-wrap"></pre>
+        </div>
+    </div>
+</div>
 {% endblock %}

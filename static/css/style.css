@@ -749,3 +749,51 @@
 .method-patch { color: #d8b4fe; }
 .method-head { color: #9ca3af; }
 .method-options { color: #9ca3af; }
+
+/* 字段编辑弹窗 */
+.column-editor-row input[type="text"] {
+    width: 100%;
+    background: #fff;
+    border: 1px solid #d1d5db;
+    border-radius: 3px;
+    padding: 3px 6px;
+    color: #1a1a2e;
+    font-size: 12px;
+    font-family: 'Consolas', monospace;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.column-editor-row input[type="text"]:focus {
+    border-color: #4a6a9a;
+}
+.column-editor-row.column-deleted {
+    opacity: 0.4;
+    text-decoration: line-through;
+}
+.column-editor-row.column-deleted input[type="text"] {
+    text-decoration: line-through;
+}
+.column-editor-row.column-modified:not(.column-deleted) {
+    border-left: 3px solid #e94560;
+}
+.column-editor-row.column-modified:not(.column-deleted) input[type="text"] {
+    border-color: #e94560;
+}
+.col-ed-del {
+    background: none;
+    border: none;
+    color: #6b7280;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: all 0.15s;
+}
+.col-ed-del:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+#column-editor-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid #1f1f38;
+}

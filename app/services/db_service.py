@@ -114,7 +114,7 @@ class DbService:
                 "name": col["name"],
                 "type": str(col["type"]),
                 "nullable": col.get("nullable", True),
-                "default": str(col.get("default", "")),
+                "default": "" if col.get("default") is None else str(col["default"]),
                 "primary_key": col["name"] in pk_columns,
                 "comment": col.get("comment", "") or "",
             }
@@ -180,7 +180,35 @@ class DbService:
         return None
 
     def execute_sql(self, sql: str, params: Optional[dict] = None) -> dict:
-        """执行 SQL 语句"""
+        """执行 SQL 语句，支持多条以 ; 分隔的语句依次执行"""
+        # 拆分多条 SQL
+        stmts = [s.strip() for s in sql.split(';') if s.strip()]
+        if not stmts:
+            return {"type": "execute", "rowcount": 0, "message": "空 SQL"}
+
+        # 单条 SQL 走原逻辑
+        if len(stmts) == 1:
+            return self._execute_single(stmts[0], params)
+
+        # 多条依次执行
+        with self.engine.connect() as conn:
+            total_rows = 0
+            messages = []
+            for stmt in stmts:
+                result = conn.execute(text(stmt), params or {})
+                if result.returns_rows:
+                    total_rows += len(result.fetchall())
+                else:
+                    total_rows += result.rowcount
+            conn.commit()
+            return {
+                "type": "execute",
+                "rowcount": total_rows,
+                "message": f"执行 {len(stmts)} 条语句，影响 {total_rows} 行",
+            }
+
+    def _execute_single(self, sql: str, params: Optional[dict] = None) -> dict:
+        """执行单条 SQL 语句"""
         with self.engine.connect() as conn:
             result = conn.execute(text(sql), params or {})
 
