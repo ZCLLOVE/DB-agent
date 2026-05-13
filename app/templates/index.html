@@ -183,10 +183,29 @@
     <div class="bg-bg-light border border-border rounded-lg w-[640px]">
         <div class="flex items-center justify-between p-4 border-b border-border">
             <h3 class="text-sm font-medium">建表语句</h3>
-            <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+            <div class="flex items-center gap-2">
+                <button id="btn-copy-ddl" class="text-xs text-muted hover:text-white border border-border rounded px-2 py-0.5 transition-colors">复制</button>
+                <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+            </div>
         </div>
         <div class="p-4">
             <pre id="ddl-content" class="bg-bg border border-border rounded p-3 text-sm text-green-300 overflow-auto max-h-80 font-mono whitespace-pre-wrap"></pre>
+        </div>
+    </div>
+</div>
+
+<!-- 约束和索引弹窗 -->
+<div id="modal-constraints" class="fixed inset-0 bg-black/60 hidden z-50 flex items-center justify-center">
+    <div class="bg-bg-light border border-border rounded-lg w-[640px] max-h-[80vh] flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b border-border">
+            <h3 class="text-sm font-medium">约束和索引</h3>
+            <div class="flex items-center gap-2">
+                <button id="btn-copy-constraints" class="text-xs text-muted hover:text-white border border-border rounded px-2 py-0.5 transition-colors">复制</button>
+                <button class="modal-close text-muted hover:text-gray-300">&times;</button>
+            </div>
+        </div>
+        <div class="p-4 overflow-auto flex-1">
+            <pre id="constraints-content" class="bg-bg border border-border rounded p-3 text-sm text-green-300 font-mono whitespace-pre-wrap"></pre>
         </div>
     </div>
 </div>

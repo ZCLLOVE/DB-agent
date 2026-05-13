@@ -122,7 +122,13 @@ function renderConnSelect() {
         opt.textContent = `${c.name} (${c.db_type})`;
         sel.appendChild(opt);
     });
-    if (current) sel.value = current;
+    if (current) {
+        sel.value = current;
+    } else if (state.connections.length > 0) {
+        sel.value = state.connections[0].id;
+        state.currentConnId = state.connections[0].id;
+        loadTableTree();
+    }
 }
 
 function renderConnList() {
@@ -424,6 +430,7 @@ function showTableContextMenu(e, tableName) {
         <div class="context-menu-item" data-action="ddl">查看建表语句</div>
         <div class="context-menu-item" data-action="select">生成 SELECT *</div>
         <div class="context-menu-item" data-action="count">查看行数</div>
+        <div class="context-menu-item" data-action="constraints">查看约束和索引</div>
     `;
 
     menu.onclick = async (ev) => {
@@ -435,6 +442,7 @@ function showTableContextMenu(e, tableName) {
             case 'ddl': showTableDdl(tableName); break;
             case 'select': insertSelectSql(tableName); break;
             case 'count': showTableRowCount(tableName); break;
+            case 'constraints': showTableConstraints(tableName); break;
         }
     };
 
@@ -491,15 +499,20 @@ function renderTableResultInfo(tabId, data) {
     const infoEl = document.querySelector(`#tab-panel-${tabId} .sql-result-info`);
     if (!infoEl) return;
     const tableName = data.tableName || '';
-    const pkInfo = (data.primary_keys && data.primary_keys.length > 0)
-        ? '' : '<span class="text-yellow-500 ml-2">(无主键，不可编辑)</span>';
+    const hasPk = data.primary_keys && data.primary_keys.length > 0;
+    const hasUk = !hasPk && data.unique_keys && data.unique_keys.length > 0;
+    const canDelete = hasPk || hasUk;
+    const pkInfo = hasPk ? '' : (hasUk ? '<span class="text-blue-400 ml-2">(通过唯一键定位)</span>' : '<span class="text-yellow-500 ml-2">(无主键/唯一键，不可编辑/删除)</span>');
     const tableLabel = tableName ? `表: ${escapeHtml(tableName)} | ` : '';
     infoEl.innerHTML = `
-        <span style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">${tableLabel}${data.rows.length} 行${pkInfo}</span>
-        <span class="flex items-center gap-2">
+        <span style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">
             <label class="flex items-center gap-1 cursor-pointer">
                 <input type="checkbox" class="accent-red-500" id="data-select-all-${tabId}"> <span class="text-xs">全选</span>
             </label>
+            ${tableLabel}${data.rows.length} 行${pkInfo}
+        </span>
+        <span class="flex items-center gap-2">
+            <button class="bg-red-700 hover:bg-red-600 text-white text-xs px-3 py-0.5 rounded${canDelete ? '' : ' opacity-40 cursor-not-allowed'}" id="data-delete-${tabId}" ${canDelete ? '' : 'disabled'}>删除</button>
             <button class="bg-primary hover:bg-red-500 text-white text-xs px-3 py-0.5 rounded" id="data-ask-ai-${tabId}">问 AI</button>
             <button class="text-xs px-3 py-0.5 rounded border border-border hover:border-accent-light hover:text-accent-light" id="data-view-${tabId}">视图</button>
         </span>
@@ -508,6 +521,11 @@ function renderTableResultInfo(tabId, data) {
     infoEl.querySelector(`#data-select-all-${tabId}`).onchange = (e) => {
         resultWrapper.querySelectorAll('.data-row-cb').forEach(cb => cb.checked = e.target.checked);
     };
+    // 删除按钮
+    const deleteBtn = infoEl.querySelector(`#data-delete-${tabId}`);
+    if (deleteBtn && canDelete) {
+        deleteBtn.onclick = () => deleteSelectedRows(tabId, data);
+    }
     infoEl.querySelector(`#data-ask-ai-${tabId}`).onclick = () => {
         const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
         if (checked.length === 0) { alert('请先勾选数据行'); return; }
@@ -522,6 +540,59 @@ function renderTableResultInfo(tabId, data) {
     };
     const viewBtn = infoEl.querySelector(`#data-view-${tabId}`);
     if (viewBtn) viewBtn.onclick = () => showColumnVisibilityPopup(tabId);
+}
+
+/** 删除勾选的行（通过主键或唯一键定位） */
+function deleteSelectedRows(tabId, data) {
+    const resultWrapper = document.getElementById(`sql-result-${tabId}`);
+    const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
+    if (checked.length === 0) { alert('请先勾选要删除的行'); return; }
+
+    const tableName = data.tableName;
+    if (!tableName) { alert('无法识别表名，不能删除'); return; }
+
+    const columns = data.columns;
+    const pkColumns = data.primary_keys || [];
+    const uniqueKeys = data.unique_keys || [];
+
+    // 引用值
+    function sqlVal(v) {
+        if (v === null || v === undefined || v === 'NULL') return 'NULL';
+        if (typeof v === 'number') return String(v);
+        return "'" + String(v).replace(/'/g, "''") + "'";
+    }
+
+    // 获取定位列（优先主键，否则唯一键）
+    let keyColumns = pkColumns.length > 0 ? pkColumns : null;
+    if (!keyColumns && uniqueKeys.length > 0) {
+        // 选第一个在 columns 中都存在的唯一键
+        keyColumns = uniqueKeys.find(uk => uk.every(c => columns.includes(c)));
+    }
+    if (!keyColumns) { alert('无可用的主键或唯一键来定位行'); return; }
+
+    const keyIndices = keyColumns.map(c => columns.indexOf(c));
+
+    // 生成 DELETE SQL
+    const dialect = (state.connections.find(c => c.id === state.currentConnId)?.db_type || '').toLowerCase();
+    const quoted = t => dialect === 'mysql' ? `\`${t}\`` : `"${t}"`;
+
+    const conditions = Array.from(checked).map(cb => {
+        const rowIdx = parseInt(cb.dataset.rowIdx);
+        const row = data.rows[rowIdx];
+        return keyColumns.map((col, i) => `${quoted(col)} = ${sqlVal(row[keyIndices[i]])}`).join(' AND ');
+    });
+
+    const sql = `DELETE FROM ${quoted(tableName)} WHERE ${conditions.map(c => `(${c})`).join(' OR ')};`;
+
+    // 走确认弹窗
+    pendingConfirmTabId = tabId;
+    pendingConfirmSql = sql;
+    $('#confirm-sql').textContent = sql;
+    pendingConfirmOnSuccess = () => {
+        // 删除成功后重新加载数据
+        if (tableName) showTableData(tableName);
+    };
+    openModal('modal-confirm');
 }
 
 async function showTableData(tableName) {
@@ -560,6 +631,15 @@ async function showTableDdl(tableName) {
     }
 }
 
+$('#btn-copy-ddl').onclick = () => {
+    const text = $('#ddl-content').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = $('#btn-copy-ddl');
+        btn.textContent = '已复制';
+        setTimeout(() => btn.textContent = '复制', 1500);
+    });
+};
+
 async function insertSelectSql(tableName) {
     const sql = `SELECT * FROM ${tableName};`;
     const tab = getActiveSqlTab();
@@ -584,6 +664,57 @@ async function showTableRowCount(tableName) {
     }
 }
 
+async function showTableConstraints(tableName) {
+    try {
+        const data = await api('GET', `/api/connections/${state.currentConnId}/tables/${encodeURIComponent(tableName)}/constraints`);
+        const constraints = data.constraints || [];
+        const indexes = data.indexes || [];
+        let text = '';
+
+        if (constraints.length > 0) {
+            text += '-- 约束\n';
+            constraints.forEach(c => {
+                text += `${c.type}`;
+                if (c.name) text += ` "${c.name}"`;
+                text += ` (${c.columns.join(', ')})`;
+                if (c.type === 'FOREIGN KEY') {
+                    text += ` -> ${c.referred_table}(${c.referred_columns.join(', ')})`;
+                }
+                if (c.type === 'CHECK' && c.sqltext) {
+                    text += ` ${c.sqltext}`;
+                }
+                text += '\n';
+            });
+        } else {
+            text += '-- 无约束\n';
+        }
+
+        text += '\n';
+        if (indexes.length > 0) {
+            text += '-- 索引\n';
+            indexes.forEach(idx => {
+                text += `${idx.unique ? 'UNIQUE ' : ''}INDEX "${idx.name}" (${idx.columns.join(', ')})\n`;
+            });
+        } else {
+            text += '-- 无索引\n';
+        }
+
+        $('#constraints-content').textContent = text.trim();
+        openModal('modal-constraints');
+    } catch (e) {
+        alert('获取约束和索引失败: ' + e.message);
+    }
+}
+
+$('#btn-copy-constraints').onclick = () => {
+    const text = $('#constraints-content').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = $('#btn-copy-constraints');
+        btn.textContent = '已复制';
+        setTimeout(() => btn.textContent = '复制', 1500);
+    });
+};
+
 /** 重新绑定结果信息栏里的全选+问AI按钮事件（tab切换恢复后调用） */
 function rebindDataActionBar(tabId) {
     const tab = state.tabs.find(t => t.id === tabId);
@@ -602,6 +733,14 @@ function rebindDataActionBar(tabId) {
     selectAllCb.onchange = (e) => {
         resultWrapper.querySelectorAll('.data-row-cb').forEach(cb => cb.checked = e.target.checked);
     };
+
+    // 删除按钮重新绑定
+    const deleteBtn = info.querySelector(`#data-delete-${tabId}`);
+    if (deleteBtn && !deleteBtn.disabled) {
+        const td = tab._tableData;
+        if (td) deleteBtn.onclick = () => deleteSelectedRows(tabId, { ...td, primary_keys: td.primary_keys || [], unique_keys: td.unique_keys || [] });
+    }
+
     askAiBtn.onclick = () => {
         const checked = resultWrapper.querySelectorAll('.data-row-cb:checked');
         if (checked.length === 0) { alert('请先勾选数据行'); return; }
@@ -1119,11 +1258,12 @@ function renderSqlResult(tabId, result) {
             rows: result.rows,
             column_meta: result.column_meta || [],
             primary_keys: result.primary_keys || [],
+            unique_keys: result.unique_keys || [],
             tableName: result.tableName || null,
         };
         // 保存供问AI用
         const tab = state.tabs.find(t => t.id === tabId);
-        if (tab) tab._tableData = { columns: data.columns, rows: data.rows, tableName: data.tableName };
+        if (tab) tab._tableData = { columns: data.columns, rows: data.rows, tableName: data.tableName, primary_keys: data.primary_keys || [], unique_keys: data.unique_keys || [] };
         renderResultTable(tabId, data);
         renderTableResultInfo(tabId, data);
     } else {
@@ -1147,6 +1287,7 @@ function renderResultTable(tabId, data) {
     const rows = Array.isArray(data) ? arguments[2] : (data.rows || []);
     const columnMeta = (!Array.isArray(data) && data.column_meta) ? data.column_meta : [];
     const pkColumns = (!Array.isArray(data) && data.primary_keys) ? data.primary_keys : [];
+    const uniqueKeys = (!Array.isArray(data) && data.unique_keys) ? data.unique_keys : [];
     const tableName = (!Array.isArray(data) && data.tableName) ? data.tableName : null;
 
     if (!columns || columns.length === 0) {
@@ -1158,9 +1299,14 @@ function renderResultTable(tabId, data) {
     const commentMap = {};
     columnMeta.forEach(c => { commentMap[c.name] = c.comment; });
 
-    // 编辑状态
-    const isEditable = tableName && pkColumns.length > 0;
-    const pkColIndices = pkColumns.map(pk => columns.indexOf(pk)).filter(i => i >= 0);
+    // 编辑状态：有主键则用主键，否则尝试唯一键
+    const isEditable = tableName && (pkColumns.length > 0 || uniqueKeys.length > 0);
+    const pkColIndices = pkColumns.length > 0
+        ? pkColumns.map(pk => columns.indexOf(pk)).filter(i => i >= 0)
+        : (() => {
+            const uk = uniqueKeys.find(u => u.every(c => columns.includes(c)));
+            return uk ? uk.map(c => columns.indexOf(c)) : [];
+        })();
 
     // 引用值用于 SQL（处理字符串、NULL）
     function sqlVal(v) {
@@ -1284,14 +1430,6 @@ function renderResultTable(tabId, data) {
                 td.title = String(cell ?? 'NULL');
                 td.dataset.row = rowIdx;
                 td.dataset.col = colIdx;
-
-                // 单击复制
-                td.onclick = () => {
-                    if (td.querySelector('input')) return; // 编辑中不复制
-                    navigator.clipboard.writeText(String(cell ?? '')).catch(() => {});
-                    td.style.background = 'rgba(233, 69, 96, 0.15)';
-                    setTimeout(() => td.style.background = '', 300);
-                };
 
                 // 双击编辑（仅可编辑表）— 弹窗方式
                 if (isEditable) {
@@ -1547,7 +1685,6 @@ function renderResultTable(tabId, data) {
                 // 更新本地数据
                 rows[rowIdx][colIdx] = newVal;
                 renderRows();
-                updateResultInfo(tabId, `已修改: ${colName}`);
             } catch (e) {
                 alert('修改失败: ' + e.message);
             }

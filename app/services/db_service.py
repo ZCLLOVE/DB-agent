@@ -79,6 +79,25 @@ class DbService:
             pass
         return tables
 
+    def get_unique_keys(self, table_name: str, schema: Optional[str] = None) -> list[list[str]]:
+        """获取唯一约束/唯一索引的列组合（用于无主键时的行定位）"""
+        inspector = inspect(self.engine)
+        unique_cols = []
+        # 唯一约束
+        try:
+            for uc in inspector.get_unique_constraints(table_name, schema=schema):
+                unique_cols.append(uc.get("column_names", []))
+        except Exception:
+            pass
+        # 唯一索引（非约束）
+        try:
+            for idx in inspector.get_indexes(table_name, schema=schema):
+                if idx.get("unique") and idx.get("column_names"):
+                    unique_cols.append(idx["column_names"])
+        except Exception:
+            pass
+        return unique_cols
+
     def describe_table(self, table_name: str, schema: Optional[str] = None) -> list[dict]:
         """获取表结构信息"""
         inspector = inspect(self.engine)
@@ -127,15 +146,18 @@ class DbService:
             column_meta = [{"name": c["name"], "comment": c["comment"]}
                            for c in columns_info]
             pk_columns = [c["name"] for c in columns_info if c["primary_key"]]
+            unique_keys = self.get_unique_keys(table_name, schema) if not pk_columns else []
         except Exception:
             column_meta = [{"name": c, "comment": ""} for c in columns]
             pk_columns = []
+            unique_keys = []
 
         return {
             "columns": columns,
             "rows": rows,
             "column_meta": column_meta,
             "primary_keys": pk_columns,
+            "unique_keys": unique_keys,
         }
 
     @staticmethod
@@ -170,6 +192,7 @@ class DbService:
                 # 尝试获取列元数据和主键（用于显示注释和编辑）
                 column_meta = []
                 primary_keys = []
+                unique_keys = []
                 table_name = self._extract_table_name(sql)
                 if table_name:
                     try:
@@ -177,6 +200,7 @@ class DbService:
                         column_meta = [{"name": c["name"], "comment": c["comment"]}
                                        for c in columns_info]
                         primary_keys = [c["name"] for c in columns_info if c["primary_key"]]
+                        unique_keys = self.get_unique_keys(table_name) if not primary_keys else []
                     except Exception:
                         pass
 
@@ -191,6 +215,7 @@ class DbService:
                     "rowcount": len(rows),
                     "column_meta": column_meta,
                     "primary_keys": primary_keys,
+                    "unique_keys": unique_keys,
                     "tableName": table_name,
                 }
             else:
@@ -200,6 +225,73 @@ class DbService:
                     "rowcount": result.rowcount,
                     "message": f"影响 {result.rowcount} 行",
                 }
+
+    def get_constraints_and_indexes(self, table_name: str, schema: Optional[str] = None) -> dict:
+        """获取表的约束和索引信息"""
+        inspector = inspect(self.engine)
+        constraints = []
+        indexes = []
+
+        # 主键约束
+        try:
+            pk = inspector.get_pk_constraint(table_name, schema=schema)
+            if pk:
+                constraints.append({
+                    "name": pk.get("name", ""),
+                    "type": "PRIMARY KEY",
+                    "columns": pk.get("constrained_columns", []),
+                })
+        except Exception:
+            pass
+
+        # 唯一约束
+        try:
+            for uc in inspector.get_unique_constraints(table_name, schema=schema):
+                constraints.append({
+                    "name": uc.get("name", ""),
+                    "type": "UNIQUE",
+                    "columns": uc.get("column_names", []),
+                })
+        except Exception:
+            pass
+
+        # 外键约束
+        try:
+            for fk in inspector.get_foreign_keys(table_name, schema=schema):
+                constraints.append({
+                    "name": fk.get("name", ""),
+                    "type": "FOREIGN KEY",
+                    "columns": fk.get("constrained_columns", []),
+                    "referred_table": fk.get("referred_table", ""),
+                    "referred_columns": fk.get("referred_columns", []),
+                })
+        except Exception:
+            pass
+
+        # 检查约束
+        try:
+            for ck in inspector.get_check_constraints(table_name, schema=schema):
+                constraints.append({
+                    "name": ck.get("name", ""),
+                    "type": "CHECK",
+                    "columns": [],
+                    "sqltext": str(ck.get("sqltext", "")),
+                })
+        except Exception:
+            pass
+
+        # 索引
+        try:
+            for idx in inspector.get_indexes(table_name, schema=schema):
+                indexes.append({
+                    "name": idx.get("name", ""),
+                    "columns": idx.get("column_names", []),
+                    "unique": idx.get("unique", False),
+                })
+        except Exception:
+            pass
+
+        return {"constraints": constraints, "indexes": indexes}
 
     def get_ddl(self, table_name: str, schema: Optional[str] = None) -> str:
         """获取建表语句"""

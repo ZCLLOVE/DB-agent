@@ -79,3 +79,13 @@ def get_row_count(conn_id: int, table_name: str,
     conn, service = _get_conn_and_service(conn_id, session)
     count = service.get_row_count(table_name, schema)
     return {"count": count}
+
+
+@router.get("/connections/{conn_id}/tables/{table_name}/constraints")
+def get_constraints_and_indexes(conn_id: int, table_name: str,
+                                 schema: str | None = Query(None),
+                                 session: Session = Depends(get_local_session)):
+    """查看表的约束和索引"""
+    conn, service = _get_conn_and_service(conn_id, session)
+    data = service.get_constraints_and_indexes(table_name, schema)
+    return data
