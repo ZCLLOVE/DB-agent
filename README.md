@@ -3,6 +3,7 @@
 # 🤖 DB-Agent
 
 **AI 驱动的轻量级数据库管理工具**
+<img width="1920" height="869" alt="ScreenShot_2026-05-13_160138_130" src="https://github.com/user-attachments/assets/e2c0bc8c-bae2-4d07-a8e0-ce8f88c51493" />
 
 像聊天一样操作数据库，不再手写 SQL
 
